@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+package-lock.json
+.next/
+dist/
+build/
+bin/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv
+venv/
+ENV/
+.env
+.pytest_cache/
+
+# Go
+/bin/
+/vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+.cursor/
+
+# Logs
+*.log

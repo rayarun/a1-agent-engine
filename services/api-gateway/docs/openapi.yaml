@@ -1,0 +1,68 @@
+swagger: "2.0"
+info:
+  title: "Agentic AI Platform - API Gateway"
+  description: "The primary entry point for triggering agents and managing their lifecycle."
+  version: "1.0.0"
+host: "api.agentic-paas.internal"
+basePath: "/api/v1"
+schemes:
+  - "https"
+paths:
+  /health:
+    get:
+      summary: "Health Check"
+      description: "Returns the health status of the API Gateway."
+      responses:
+        200:
+          description: "Healthy"
+          schema:
+            type: "string"
+
+  /agents/{agent_id}/trigger:
+    post:
+      summary: "Trigger Agent Task"
+      description: "Dispatches a task to a specific agent identified by agent_id."
+      parameters:
+        - name: "agent_id"
+          in: "path"
+          required: true
+          type: "string"
+        - name: "body"
+          in: "body"
+          required: true
+          schema:
+            $ref: "#/definitions/TriggerRequest"
+      responses:
+        202:
+          description: "Accepted - Workflow initiated"
+          schema:
+            $ref: "#/definitions/TriggerResponse"
+        401:
+          description: "Unauthorized"
+        404:
+          description: "Agent not found"
+
+definitions:
+  TriggerRequest:
+    type: "object"
+    required:
+      - "event_source"
+      - "payload"
+    properties:
+      event_source:
+        type: "string"
+        example: "datadog-monitor"
+      payload:
+        type: "object"
+        description: "Arbitrary event data"
+  
+  TriggerResponse:
+    type: "object"
+    properties:
+      workflow_id:
+        type: "string"
+      run_id:
+        type: "string"
+      status:
+        type: "string"
+        example: "initiated"

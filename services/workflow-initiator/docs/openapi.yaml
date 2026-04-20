@@ -1,0 +1,69 @@
+swagger: "2.0"
+info:
+  title: "Agentic AI Platform - Workflow Initiator"
+  description: "Internal service for dispatching Temporal workflows based on agent manifests."
+  version: "1.0.0"
+host: "workflow-initiator.internal"
+basePath: "/api/v1"
+schemes:
+  - "http"
+paths:
+  /sessions:
+    post:
+      summary: "Start a new agent session"
+      description: "Creates a Temporal workflow for the specified agent."
+      parameters:
+        - name: "body"
+          in: "body"
+          required: true
+          schema:
+            $ref: "#/definitions/StartSessionRequest"
+      responses:
+        201:
+          description: "Session started"
+          schema:
+            $ref: "#/definitions/SessionStatus"
+  
+  /sessions/{workflow_id}/status:
+    get:
+      summary: "Get session status"
+      description: "Retrieves the current state of a Temporal workflow."
+      parameters:
+        - name: "workflow_id"
+          in: "path"
+          required: true
+          type: "string"
+      responses:
+        200:
+          description: "Status retrieved"
+          schema:
+            $ref: "#/definitions/SessionStatus"
+
+definitions:
+  StartSessionRequest:
+    type: "object"
+    required:
+      - "agent_id"
+    properties:
+      agent_id:
+        type: "string"
+      session_id:
+        type: "string"
+        description: "Trace/Idempotency key"
+      context:
+        type: "object"
+        additionalProperties:
+          type: "string"
+  
+  SessionStatus:
+    type: "object"
+    properties:
+      workflow_id:
+        type: "string"
+      run_id:
+        type: "string"
+      status:
+        type: "string"
+        example: "RUNNING"
+      result:
+        type: "string"
