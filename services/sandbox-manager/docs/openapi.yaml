@@ -1,84 +1,15 @@
 swagger: "2.0"
 info:
-  title: "Agentic AI Platform - Sandbox Manager"
-  description: "Internal service for managing ephemeral execution environments."
+  title: "Sandbox Manager"
   version: "1.0.0"
-host: "sandbox-manager.internal"
+host: "localhost:8082"
 basePath: "/api/v1"
 schemes:
   - "http"
 paths:
-  /sandboxes:
+  /execute:
     post:
-      summary: "Provision a new sandbox"
-      description: "Creates an isolated Docker container for code execution."
-      parameters:
-        - name: "body"
-          in: "body"
-          required: true
-          schema:
-            $ref: "#/definitions/ProvisionRequest"
-      responses:
-        201:
-          description: "Sandbox created"
-          schema:
-            $ref: "#/definitions/SandboxInfo"
-  
-  /sandboxes/{sandbox_id}/execute:
-    post:
-      summary: "Execute code in a sandbox"
-      description: "Runs a script or command within the specified isolated environment."
-      parameters:
-        - name: "sandbox_id"
-          in: "path"
-          required: true
-          type: "string"
-        - name: "body"
-          in: "body"
-          required: true
-          schema:
-            $ref: "#/definitions/ExecuteRequest"
+      summary: "Execute code in an isolated container"
       responses:
         200:
-          description: "Execution complete"
-          schema:
-            $ref: "#/definitions/ExecuteResponse"
-
-definitions:
-  ProvisionRequest:
-    type: "object"
-    properties:
-      image:
-        type: "string"
-        example: "python:3.9-slim"
-      env:
-        type: "object"
-        additionalProperties:
-          type: "string"
-  
-  SandboxInfo:
-    type: "object"
-    properties:
-      sandbox_id:
-        type: "string"
-      status:
-        type: "string"
-
-  ExecuteRequest:
-    type: "object"
-    required:
-      - "code"
-    properties:
-      code:
-        type: "string"
-        description: "The script or command to execute"
-  
-  ExecuteResponse:
-    type: "object"
-    properties:
-      stdout:
-        type: "string"
-      stderr:
-        type: "string"
-      exit_code:
-        type: "integer"
+          description: "Execution result"

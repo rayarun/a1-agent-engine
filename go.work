@@ -1,0 +1,8 @@
+go 1.25.4
+
+use (
+	./packages/go-shared
+	./services/api-gateway
+	./services/sandbox-manager
+	./services/workflow-initiator
+)

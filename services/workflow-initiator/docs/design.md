@@ -1,31 +1,16 @@
-# Workflow Initiator Design Document
+# Workflow Initiator Design
 
 ## Overview
-The Workflow Initiator service is the bridge between the platform's API layer and the Temporal orchestration engine. It is responsible for translating agent task requests into durable Temporal workflows.
+The Workflow Initiator is a bridge between the RESTful API world and the durable orchestration world of Temporal.
 
 ## Architecture
-Built in Golang, it serves as a high-throughput dispatcher. It receives agent identifiers and payloads, fetches the corresponding YAML manifests from the registry, and submits a start request to the Temporal cluster.
+- **Technology**: Go 1.25.4 (net/http + Temporal Go SDK)
+- **Primary Role**: Workflow dispatcher and session manager.
+- **Endpoints**:
+    - `POST /api/v1/sessions`: Starts a new Temporal `AgentWorkflow`.
+    - `GET /api/v1/sessions/{id}`: High-level query for workflow status/result.
 
-### Key Interactions
-- **API Gateway**: Receives task submission requests.
-- **Agent Registry (Postgres)**: Fetches agent manifests and configurations.
-- **Temporal Cluster**: Dispatches work items to the orchestrator.
-- **Observability Stack**: Traces the handoff from API request to background workflow.
-
-## Key Features
-- **Manifest Translation**: Parses YAML agent manifests and applies logic to configure Temporal workflow options (timeouts, retries).
-- **Idempotency Management**: Ensures that duplicate task requests (using session IDs) do not spawn redundant workflows.
-- **Workflow Life-Cycle Management**: Provides APIs to query workflow status, send signals (for HITL), or cancel executions.
-
-## Technical Stack
-- **Language**: Golang
-- **Orchestration**: Temporal Go SDK
-- **Persistence**: PostgreSQL (for manifest lookup)
-- **ID Management**: UUID/Session-based idempotency.
-
-## Current Status
-- [x] Golang project structure initialized.
-- [x] Basic health-check endpoint.
-- [ ] Temporal Go SDK integration.
-- [ ] Manifest parsing logic.
-- [ ] Workflow submission and status APIs.
+## Technical Details
+- **Temporal Client**: Uses a shared connection to the Temporal frontend.
+- **Session ID Mapping**: Translates platform-level session IDs into unique Temporal Workflow IDs.
+- **Result Retrieval**: Blocks on the Temporal workflow handle to retrieve results for the Status API.

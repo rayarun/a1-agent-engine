@@ -1,29 +1,14 @@
-# Sandbox Manager Design Document
+# Sandbox Manager Design
 
 ## Overview
-The Sandbox Manager is a critical security component that provides isolated execution environments for untrusted code or scripts. It ensures that agent tools can execute arbitrary logic without compromising the host system or legal internal network.
+The Sandbox Manager provides a secure, isolated execution environment for untrusted agent code.
 
 ## Architecture
-Built as a Go microservice, it manages a pool of ephemeral Docker containers. It exposes an internal API for providing a sandbox, executing code within it, and cleaning up afterwards.
+- **Technology**: Go 1.25.4 (net/http + Moby/Docker SDK)
+- **Primary Role**: Lifecycle management of ephemeral executor containers.
+- **Endpoint**: `POST /api/v1/execute`
 
-### Key Interactions
-- **Agent Workers**: Request execution of tool logic within a sandbox.
-- **Docker Engine**: Used to spawn and manage container lifecycles.
-- **Observability Stack**: Reports execution logs and resource usage.
-
-## Key Features
-- **Strict Isolation**: Uses Docker containers with restricted egress and no root privileges.
-- **JIT Provisioning**: Spawns short-lived environments on-demand.
-- **Resource Limiting**: Enforces CPU and memory constraints on sandboxed processes.
-- **Clean Tear-down**: Automatically destroys environments post-execution to prevent state leak.
-
-## Technical Stack
-- **Language**: Golang
-- **Containerization**: Docker (via Docker Engine API)
-- **Networking**: Isolated VPC subnets with restricted egress.
-
-## Current Status
-- [ ] Golang project structure initialization.
-- [ ] Docker Engine API integration.
-- [ ] Sandbox provisioning logic.
-- [ ] Execution and log streaming.
+## Security Model
+- **Isolation**: Each code block runs in a fresh, unprivileged container with no network access (except where explicitly allowed).
+- **Socket Access**: The Sandbox Manager has read/write access to the host's `/var/run/docker.sock`, but this access is NOT shared with the worker containers.
+- **Time-to-Live**: Containers are automatically removed after execution or timeout.
