@@ -5,56 +5,64 @@
 ## Platform Vision & Capability Requirements
 
 ### Architecture Vision
-To provide a secure, highly-scalable, and developer-friendly Platform-as-a-Service (PaaS) that democratizes the creation of resilient, stateful AI agents across the enterprise. By abstracting away the complex "plumbing" of LLM orchestration, state management, and security guardrails, the platform empowers product teams, SREs, and domain experts to deploy autonomous solutions (both interactive and event-driven) using a simple "No-Code" manifest approach.
+To provide a secure, highly-scalable, and developer-friendly Platform-as-a-Service (PaaS) that transforms how enterprises build and operate AI-driven automation. The platform is structured around a four-tier capability hierarchy — **Tools**, **Skills**, **Sub-Agents**, and **Agent Teams** — that separates primitive execution from governed composition, and single-agent reasoning from coordinated multi-agent workflows. This architecture enables platform engineers to govern every primitive while domain experts assemble sophisticated, self-orchestrating workflows without writing code.
 
 ### Core Capability Goals
 Architecturally, the system is designed from the ground up to fulfill several strict enterprise requirements:
-- **Democratize Creation**: Provide a visual **Agent Studio** and manifest builder, relying on a robust Skill Catalog so domain experts can deploy agents in hours rather than weeks.
-- **Enterprise-Grade Resilience**: Guarantee zero-data-loss execution via **Durable ReAct loops**. By relying on Temporal for orchestration, if a node crashes or an API rate limit is triggered, the AI agent resumes its reasoning trace exactly where it left off.
-- **Strict Execution Security**: Ensure AI actions execute using short-lived, least-privilege machine identities. Untrusted code or tools run securely inside isolated **Docker Containers** for maximum multi-cloud portability.
-- **Human-in-the-Loop (HITL)**: Transparently throttle agent workflows requiring manual authorization for mutating actions, pausing execution indefinitely while awaiting secure MFA sign-off. For schedule-triggered workflows with no interactive session, HITL notifications are delivered asynchronously to configured Slack channels and email targets.
-- **Universal Auditability**: Keep a 100% immutable log of all LLM reasoning trees, prompts, and tool triggers via OpenTelemetry tracing for regulatory compliance and SRE review.
-- **Event-Driven Invocation**: Ensure agents can be triggered persistently via automated webhooks, supporting autonomous background remediation tasks without requiring interactive chat.
-- **Hybrid Workflow Execution**: Support workflows that compose deterministic (non-agentic) steps, agentic ReAct reasoning loops, and HITL approval gates within a single durable Temporal workflow. Each step's execution mode is declared in the manifest and enforced at runtime, preventing unnecessary LLM invocations on deterministic steps while sharing a single execution context and audit trail across all modes.
-- **Scheduled Triggers**: Support cron-based and fixed-interval scheduled workflow invocations as a first-class trigger mode alongside webhooks and chat, backed by Temporal's native Schedule primitives for exactly-once delivery, overlap policy enforcement, and missed-run catchup on platform restart.
+- **Composable Agent Workforce**: A four-tier hierarchy (Tools → Skills → Sub-Agents → Agent Teams) allows incremental composition — from raw API operations through governed skill bundles to coordinated specialist pipelines that decompose and solve complex multi-domain tasks in parallel.
+- **Enterprise-Grade Resilience**: Guarantee zero-data-loss execution via **Durable ReAct loops** and **Team Orchestration** backed by Temporal. Sub-agent failures within a team are retried independently; the team orchestrator resumes without restarting the entire workflow.
+- **Zero-Trust Security by Design**: Every tool invocation uses a short-lived, scoped OIDC token. All inter-service communication runs over mTLS. Inbound webhooks require HMAC-SHA256 signature validation. Secrets rotate automatically with leak-detection scanning.
+- **Human-in-the-Loop (HITL)**: Any agent or team member invoking a mutating tool suspends the entire team workflow pending MFA-backed approval, with full execution trace context visible to the Approver.
+- **Governed Extensibility Without Lock-in**: Security-reviewed tool registration, independently versioned skills, and per-sub-agent model selection prevent both accidental capability sprawl and vendor lock-in.
+- **Operational Accountability**: SLOs are tracked at workflow, skill, and tool granularity. Every platform action is costed and attributed per tenant, agent, and skill. Incident runbooks and SLO burn-rate alerts ensure predictable operation at enterprise scale.
 
 ---
 
 ## 1. Logical Architecture
-The logical architecture decouples the definition of an agent from its execution, ensuring platform engineers can manage the underlying infrastructure while developers focus on use cases. It clearly separates "Tools" (raw APIs) from "Skills" (governed logic) and adds a dedicated scheduling surface to the Control Plane.
+The logical architecture decouples the definition of an agent from its execution across six planes. It separates primitive capability registration (Tools) from governed composition (Skills), and single-agent reasoning from coordinated multi-agent execution (Agent Teams). A dedicated Security Plane enforces zero-trust policy across all planes as a cross-cutting concern.
 
 ```mermaid
 graph TD
     subgraph Control_Plane
-        UI[Agent Studio UI] --> SkillCatalog[Skill Catalog]
-        UI --> ScheduleBuilder[Schedule Builder]
-        SkillCatalog --> Registry[Agent Manifest Registry]
+        UI[Agent Studio UI] --> ToolRegistry[Tool Registry]
+        UI --> SkillCatalog[Skill Catalog]
+        SkillCatalog --> SubAgentRegistry[Sub-Agent Registry]
+        SubAgentRegistry --> TeamManifestRegistry[Team Manifest Registry]
+        TeamManifestRegistry --> AgentRegistry[Agent Manifest Registry]
+        AgentRegistry --> Policy[RBAC and Policy Engine]
         UI --> Simulator[Agent Testing Simulator]
-        Registry --> Policy[RBAC and Policy Engine]
-        ScheduleBuilder --> ScheduleService[Schedule Service]
+        UI --> LifecycleMgr[Lifecycle and Deployment Manager]
     end
 
     subgraph Orchestration_Plane
-        Gateway[Agent API Gateway] --> Workflow[Temporal Workflow Engine]
-        ScheduleEngine[Temporal Schedule Engine] --> Workflow
-        ScheduleService --> ScheduleEngine
-        Workflow --> SDK[Agent Worker - ReAct Loop]
-        Workflow --> DetRunner[Deterministic Step Runner]
-        SDK --> HITL[HITL and Signal Manager]
-        DetRunner --> HITL
+        Gateway[Agent API Gateway] --> WebhookValidator[Webhook HMAC Validator]
+        WebhookValidator --> Workflow[Temporal Workflow Engine]
+        Workflow --> AgentWorker[Single-Agent Worker]
+        Workflow --> TeamOrchestrator[Team Orchestrator]
+        TeamOrchestrator --> SubAgentDispatcher[Sub-Agent Dispatcher]
+        SubAgentDispatcher -.->|parallel fan-out| AgentWorker
+        AgentWorker --> HITL[HITL and Signal Manager]
     end
 
     subgraph Execution_Plane
+        SkillDispatcher[Skill Dispatcher and Hook Engine]
         Router[Tool Router]
         Sandbox[Ephemeral Sandboxes]
         InternalAPI[Internal Go Microservices]
     end
 
     subgraph Data_Plane
-        ShortMem[Session Cache]
-        LongMem[Vector DB]
-        OTel[Observability and Audit]
-        ScheduleStore[Schedule State Store]
+        ShortMem[Session Cache - Redis]
+        LongMem[Vector DB - tenant-partitioned]
+        LifecycleStore[Lifecycle State Store]
+        CostStore[Cost Attribution Store]
+        OTel[Observability and Audit - OTel]
+    end
+
+    subgraph Security_Plane
+        mTLS[Service Mesh - mTLS via Istio]
+        STS[Internal STS - short-lived OIDC tokens]
+        SecretRotation[Secret Rotation Service]
     end
 
     subgraph Inference_Plane
@@ -63,25 +71,29 @@ graph TD
         LocalLLM[Local Inference: vLLM / Ollama]
     end
 
-    Registry -.-> Gateway
-    SDK --> Router
-    DetRunner --> Router
+    AgentRegistry -.-> Gateway
+    AgentWorker --> SkillDispatcher
+    SkillDispatcher --> Router
     Router --> Sandbox
     Router --> InternalAPI
-    SDK --> ShortMem
-    SDK --> LongMem
-    SDK --> OTel
-    SDK --> LLMRouter
-    ScheduleService --> ScheduleStore
+    AgentWorker --> ShortMem
+    AgentWorker --> LongMem
+    AgentWorker --> OTel
+    TeamOrchestrator --> CostStore
+    LifecycleMgr --> LifecycleStore
+    AgentWorker --> LLMRouter
     LLMRouter --> PublicLLM
     LLMRouter --> LocalLLM
+    Security_Plane -.->|cross-cutting| Orchestration_Plane
+    Security_Plane -.->|cross-cutting| Execution_Plane
 ```
 
-- **Control Plane**: Features the Agent Studio, acting as the command center for users to build manifests. Senior engineers assemble raw APIs into governed items in the Skill Catalog, which No-Code users select to build their agents in the Agent Manifest Registry. The new **Schedule Builder** tab allows any user to define cron or interval schedules against any deployed agent or team, with the **Schedule Service** persisting schedule metadata and owning the Temporal Schedule lifecycle.
-- **Orchestration Plane (The Brain)**: An Agent API Gateway routes webhook and chat requests to the Temporal Workflow Engine. The **Temporal Schedule Engine** fires scheduled invocations autonomously, routed through the Schedule Service before reaching the same Workflow Engine. For each workflow, the engine dispatches to either the **Agent Worker** (ReAct reasoning loop) or the **Deterministic Step Runner** (direct skill chain execution, no LLM) depending on the manifest step type. Both runners converge on the same **HITL and Signal Manager**.
-- **Execution Plane (The Hands)**: Completely isolated from the reasoning engine. Routes underlying tool calls to ephemeral sandboxes or internal Go microservices, regardless of whether the calling step was agentic or deterministic.
-- **Data Plane**: Manages short-term session cache, long-term Vector DB storage, OpenTelemetry observability, and the **Schedule State Store** (PostgreSQL tables tracking schedule definitions and per-run history).
-- **Inference Plane**: A centralized proxy routing all prompt inferences strictly outward to SaaS providers or inward toward self-hosted GPU edge nodes. Deterministic steps never touch this plane.
+- **Control Plane**: The command center for all four tiers. Platform engineers register Tools via the Tool Registry (security review required). Skill Developers compose Tools into Skills in the Skill Catalog. Sub-Agent Developers define capability contracts in the Sub-Agent Registry. No-Code creators wire Sub-Agents into Team Manifests and Agent Manifests. The Lifecycle Manager governs state transitions and deployment strategies across all tiers.
+- **Orchestration Plane (The Brain)**: The Agent API Gateway validates inbound requests (HMAC on webhooks) and routes to the Temporal Workflow Engine. For single agents, the engine dispatches to an Agent Worker. For teams, it dispatches to the Team Orchestrator, which fans out to the Sub-Agent Dispatcher, launching parallel Agent Workers per sub-agent. HITL signals propagate team-wide, suspending all parallel branches.
+- **Execution Plane (The Hands)**: The Skill Dispatcher receives slash-command-style invocations, validates arguments, fires pre/post hooks, and routes tool chains through the Tool Router. The Tool Router dispatches to Ephemeral Sandboxes (arbitrary code) or Internal Go Microservices (typed platform APIs).
+- **Data Plane**: Redis for short-term session context; pgvector (tenant-partitioned) for long-term semantic memory; a Lifecycle State Store for immutable audit trails of all four-tier transitions; a Cost Attribution Store (TimescaleDB) for per-tenant/agent/skill cost metering; OTel collectors for unified observability.
+- **Security Plane (Cross-Cutting)**: Istio enforces mTLS between all services. The Internal STS issues short-lived (5-min TTL), scoped OIDC tokens for every agent and sub-agent invocation. The Secret Rotation Service manages automated credential rotation and leak detection.
+- **Inference Plane**: A centralized LLM API Gateway (e.g., LiteLLM) proxies all model requests. Model selection is configurable per sub-agent — members of the same team can target different providers without changing the team manifest structure.
 
 ## 2. Physical Architecture (AWS Native)
 Maps the logical components to an AWS cloud-native environment, utilizing managed services.
@@ -94,59 +106,59 @@ graph LR
 
     subgraph EKS_Cluster
         AdminUI_Pod[Agent Studio UI Pods]
-        API_Pod[Platform API Pods - workflow-initiator]
-        Worker_Pod[Temporal Worker Pods]
+        API_Pod[Platform API Pods - with Istio sidecar]
+        Worker_Pod[Agent Worker Pods - with Istio sidecar]
+        TeamOrch_Pod[Team Orchestrator Pods - with Istio sidecar]
+        SubAgentReg_Pod[Sub-Agent Registry Pods]
+        SkillDisp_Pod[Skill Dispatcher Pods]
+        CostAttr_Pod[Cost Attribution Pods]
         Tool_Pod[Internal Microservice Pods]
-        Schedule_Pod[Schedule Service Pods]
-        Hydrator_Pod[Context Hydrator Pods]
     end
 
     subgraph Security_Perimeter
         Sandbox[Isolated Docker Containers]
     end
 
-    subgraph Persistence_Layer
-        GatewayCache(ElastiCache Redis\nOwner: platform-gateway)
-        ManifestRDS(RDS PostgreSQL - manifest-db\nOwner: workflow-initiator)
-        ScheduleRDS(RDS PostgreSQL - schedule-db\nOwner: schedule-service)
-        MemoryRDS(RDS PostgreSQL+pgvector - memory-db\nOwner: context-hydrator)
-        TemporalRDS(RDS PostgreSQL - temporal-db\nOwner: temporal-cluster)
+    subgraph Managed_Services
+        RDS(Amazon RDS - PostgreSQL with tenant schemas and RLS)
+        ElastiCache(ElastiCache Redis - session cache and idempotency store)
+        S3(Amazon S3 - vector archive and WAL backups)
     end
 
     EKS_Ingress --> AdminUI_Pod
     EKS_Ingress --> API_Pod
     AdminUI_Pod --> API_Pod
     API_Pod --> Temporal_Service{Temporal Cluster}
-    API_Pod --> Schedule_Pod
-    API_Pod --> ManifestRDS
-    API_Pod --> GatewayCache
-    Schedule_Pod --> Temporal_Service
-    Schedule_Pod --> ScheduleRDS
-    Temporal_Service --> TemporalRDS
     Temporal_Service --> Worker_Pod
+    Temporal_Service --> TeamOrch_Pod
+    TeamOrch_Pod --> Worker_Pod
+    Worker_Pod --> SkillDisp_Pod
+    SkillDisp_Pod --> Tool_Pod
+    Worker_Pod --> SubAgentReg_Pod
     Worker_Pod --> LLM((LLM Provider API))
-    Worker_Pod --> Tool_Pod
     Worker_Pod --> Sandbox
-    Worker_Pod --> Hydrator_Pod
-    Hydrator_Pod --> MemoryRDS
-    Hydrator_Pod --> GatewayCache
+    CostAttr_Pod --> RDS
+    Temporal_Service --> RDS
+    Worker_Pod --> ElastiCache
+    Worker_Pod --> RDS
+    Worker_Pod --> S3
 ```
 
-- **Ingress**: Traffic flows through an AWS ALB to an Nginx Ingress on an Amazon EKS Cluster. Supports both synchronous REST/gRPC traffic and asynchronous webhook events.
-- **Compute (EKS)**:
-  - Agent Studio UI Pods (Next.js).
-  - Platform API Pods / Workflow Initiator (Go).
-  - Temporal Worker Pods (Python) running the ReAct loop and Deterministic Step Runner — stateless; no direct DB ownership.
-  - Internal Microservice Pods.
-  - **Schedule Service Pods** (Go) — own the `schedule-db` exclusively; no other service may query it directly.
-  - **Context Hydrator Pods** (Go/Python) — own the `memory-db` (pgvector) exclusively.
-- **Isolation Layer**: Arbitrary code execution happens in a strictly peered, isolated VPC/Subnet using dedicated ephemeral Docker Containers.
-- **Managed Persistence (Database-per-Service)**:
-  - `temporal-db` — Amazon RDS (PostgreSQL), exclusively managed by the Temporal Cluster. Platform services never connect to this database.
-  - `manifest-db` — Amazon RDS (PostgreSQL), exclusively owned by `workflow-initiator`. Stores agent manifests, skill definitions, and RBAC rules.
-  - `schedule-db` — Amazon RDS (PostgreSQL), exclusively owned by `schedule-service`. Stores `workflow_schedules` and `schedule_run_history`.
-  - `memory-db` — Amazon RDS (PostgreSQL) with the `pgvector` extension, exclusively owned by `context-hydrator`. Stores long-term agent memories and RAG embeddings.
-  - `gateway-cache` — Amazon ElastiCache (Redis), owned by `platform-gateway`. Used for rate limiting, idempotency key deduplication, and short-term session buffering.
+- **Ingress**: Traffic flows through AWS ALB to Nginx Ingress on EKS. Webhook events from external systems (Datadog, PagerDuty) enter through the same ALB; the API Gateway validates HMAC signatures before dispatching to Temporal.
+- **Compute (EKS)** — all pods run Istio sidecars enforcing mTLS:
+  - Agent Studio UI Pods (Next.js)
+  - Platform API Pods (Go) — HMAC validation, RBAC, OIDC token issuance
+  - Agent Worker Pods (Python/Temporal) — single-agent ReAct loops
+  - Team Orchestrator Pods (Python/Temporal) — team decomposition, fan-out, synthesis
+  - Sub-Agent Registry Pods (Go) — contract storage and lookup
+  - Skill Dispatcher Pods (Go) — slash-command parsing, hook execution, tool routing
+  - Cost Attribution Pods (Go) — OTel span consumption, quota enforcement
+  - Internal Microservice Pods (Go) — primitive platform tools
+- **Isolation Layer**: Arbitrary code execution runs in ephemeral Docker Containers in an isolated VPC subnet with blocked lateral network movement.
+- **Managed Persistence**:
+  - Amazon RDS (PostgreSQL) with per-tenant schemas, RLS, and TimescaleDB extension for cost time-series data
+  - Amazon ElastiCache (Redis) for session context, rate limiting, and webhook idempotency key cache (24h TTL)
+  - Amazon S3 for cold-storage archival of Vector DB embeddings and continuous WAL backups (RPO ≤ 15 min)
 
 ## 3. Component Design
 
@@ -154,42 +166,73 @@ graph LR
 classDiagram
     class AgentStudio {
         +renderManifestBuilder()
-        +manageSkillCatalog()
-        +runSimulationSession()
-        +renderScheduleBuilder()
-        +renderHybridTraceVisualizer()
+        +renderToolRegistry()
+        +renderSkillBuilder()
+        +renderSubAgentRegistry()
+        +renderTeamBuilder()
+        +renderOperationsDashboard()
+        +runSimulationSession(mode: single|team)
     }
     class PlatformGateway {
         +submitTask(agentId, payload)
         +triggerEvent(topic, payload)
-        +manageSchedule(scheduleId, action)
+        +validateWebhookHMAC(body, sig, timestamp)
+        +enforceQuota(tenantId, resourceType)
+        +issueAgentToken(agentId, allowedSkills)
     }
     class WorkflowInitiator {
         +fetchManifest(agentId)
-        +startTemporalWorkflow(manifest, payload, triggerSource)
+        +startAgentWorkflow(manifest, payload)
+        +startTeamWorkflow(teamManifest, payload)
     }
     class TemporalWorker {
         +executeReActLoop()
-        +executeDeterministicChain()
-        +handleHandoff()
+        +executeTeamWorkflow()
+        +dispatchSubAgent(contractId, task)
+        +synthesizeTeamResults(results[])
     }
-    class ScheduleService {
-        +createSchedule(spec)
-        +updateSchedule(id, spec)
-        +pauseSchedule(id)
-        +resumeSchedule(id)
-        +triggerNow(id)
-        +renderPayloadTemplate(template, vars)
-        +recordRunHistory(scheduleId, status)
+    class SubAgentRegistry {
+        +register(contract)
+        +resolve(agentId)
+        +listBySkill(skillId)
+        +transition(agentId, targetState)
     }
-    class HITLManager {
-        +suspendForApproval(workflowId, tool, context)
-        +notifyAsync(targets, approvalLink)
-        +resumeOnSignal(workflowId, mfaToken)
+    class TeamOrchestrator {
+        +decomposeGoal(prompt)
+        +fanOut(subAgents[])
+        +collectResults()
+        +synthesize(results[])
+        +propagateHITL(workflowId)
+    }
+    class SkillDispatcher {
+        +parseCommand(slashCmd)
+        +validateArgs(schema)
+        +executeHooks(phase, context)
+        +route(toolChain)
+    }
+    class HookEngine {
+        +registerHook(skill, phase, handler)
+        +fire(phase, context)
+    }
+    class WebhookValidator {
+        +verifyHMAC(body, sig, secret)
+        +checkReplay(timestamp)
+        +deduplicateIdempotency(key)
+    }
+    class LifecycleManager {
+        +transition(resourceId, tier, targetState)
+        +deployCanary(manifest, pct)
+        +rollback(resourceId)
+        +auditTransition(event)
+    }
+    class CostAttributionService {
+        +record(tenantId, agentId, skillId, tokens, sandboxMs)
+        +getReport(tenantId)
+        +checkQuota(tenantId)
     }
     class ContextHydrator {
         +fetchRecentSession()
-        +queryVectorDB(intent)
+        +queryVectorDB(intent, tenantId)
         +injectSkillSOPs(skills)
     }
     class SandboxManager {
@@ -199,247 +242,305 @@ classDiagram
     }
 
     AgentStudio --> PlatformGateway
+    PlatformGateway --> WebhookValidator
     PlatformGateway --> WorkflowInitiator
-    PlatformGateway --> ScheduleService
-    ScheduleService --> WorkflowInitiator
     WorkflowInitiator --> TemporalWorker
+    WorkflowInitiator --> TeamOrchestrator
+    TeamOrchestrator --> SubAgentRegistry
+    TeamOrchestrator --> TemporalWorker
+    TemporalWorker --> SkillDispatcher
+    SkillDispatcher --> HookEngine
     TemporalWorker --> ContextHydrator
     TemporalWorker --> SandboxManager
-    TemporalWorker --> HITLManager
+    TemporalWorker --> CostAttributionService
+    LifecycleManager --> SubAgentRegistry
 ```
 
-- **Agent Studio (Next.js)**: Frontend for lifecycle management, creating skills, building agent manifests, simulation, and the new **Schedule Builder** tab and **Hybrid Trace Visualizer** with step-type badges.
-- **Platform Gateway (Go)**: The REST/gRPC/Webhook entry point. Handles rate limiting, authentication, event payload mapping, and proxies schedule management requests to the Schedule Service.
-- **Workflow Initiator (Go)**: Reads the agent manifest and translates it into a Temporal workflow request. Accepts `trigger_source` (`webhook`, `chat`, `scheduled`) to enable downstream behavioral differentiation (e.g., async HITL mode for scheduled invocations).
-- **Temporal Worker (Python)**: The core execution process. Runs either the ReAct loop (for agentic steps) or a deterministic skill chain (for non-agentic steps) depending on the manifest step type. Handles HITL suspension and passes `trigger_source` to the HITL Manager to select blocking vs. async-notify mode.
-- **Schedule Service (Go)**: New service. Stores schedule definitions in PostgreSQL, owns Temporal Schedule API calls (create/update/delete/pause/resume), renders payload templates with time variables at fire time, and maintains per-run history. Does not own execution timing — Temporal does.
-- **HITL Manager**: Intercepts mutating tool invocations. In blocking mode (chat/webhook), suspends the workflow and waits. In async-notify mode (scheduled), suspends and immediately dispatches Slack/email notifications with approval deep links. Resumes the workflow on signal receipt with MFA validation.
-- **Context Hydrator**: Injects relevant context (long-term memory and Skill SOPs) into the LLM system prompt before agentic steps. Exclusively owns `memory-db` (RDS PostgreSQL + pgvector) — no other service connects to this database. Agent Workers retrieve memory exclusively via the Context Hydrator's gRPC endpoint. Skipped entirely for deterministic steps.
-- **Sandbox Manager**: Provisions secure execution environments on the fly and destroys them post-execution.
+- **Agent Studio (Next.js)**: Frontend for all four builder surfaces — Tool Registry, Skill Builder, Sub-Agent Registry, Team Manifest Editor — plus simulation in single-agent or team mode and the Operations Dashboard.
+- **Platform Gateway (Go)**: Edge entry point. Validates HMAC signatures on webhook events, enforces per-tenant quotas, issues scoped OIDC tokens for agent executions, and routes to Workflow Initiator.
+- **Webhook Validator (Go)**: Standalone middleware inside the Gateway. Computes and compares HMAC-SHA256 signatures, validates timestamps (anti-replay), and deduplicates idempotency keys via Redis.
+- **Workflow Initiator (Go)**: Translates platform-level manifest IDs into Temporal workflow requests. Routes single-agent requests to `AgentWorkflow` and team requests to `TeamWorkflow`.
+- **Team Orchestrator (Python/Temporal)**: Implements `TeamWorkflow`. Decomposes goals via LLM, fans out to sub-agent workers in parallel via `SubAgentDispatcher`, collects typed results, synthesizes the final response, and propagates HITL suspension team-wide.
+- **Sub-Agent Registry (Go)**: Stateless CRUD service backed by PostgreSQL. Stores versioned sub-agent contracts. Resolves capability contracts at workflow start time.
+- **Temporal Worker (Python)**: Implements single-agent `AgentWorkflow`. Runs the durable ReAct loop: context hydration → LLM reasoning → skill dispatch → observation → loop.
+- **Skill Dispatcher (Go)**: Parses slash-command invocations, validates arguments against skill schemas, fires the Hook Engine for pre/post hooks, and routes tool chains to the Tool Router.
+- **Hook Engine (Go)**: Executes declarative YAML-configured hooks at pre/post-skill boundaries for audit logging, cost metering, and HITL interception.
+- **Lifecycle Manager (Go)**: Enforces state machines across all four tiers (Draft → Staged → Active ↔ Paused → Archived). Manages canary deployment traffic splitting via Argo Rollouts. Emits immutable lifecycle events to the Lifecycle State Store.
+- **Cost Attribution Service (Go)**: Consumes OTel spans from a Kafka topic. Aggregates token counts, sandbox execution time, and Vector DB ops by (tenant, agent, skill). Enforces quota limits in real time.
+- **Context Hydrator**: Loads tenant-partitioned vector memories and injects Skill SOPs into the agent's system prompt before each LLM call.
+- **Sandbox Manager**: Provisions ephemeral Docker containers for arbitrary code execution and destroys them immediately post-execution.
 
 ## 4. Execution Sequences
 
-### 4.1 Interactive / Webhook HITL Flow
+### 4.1 Single-Agent HITL Flow
 
 ```mermaid
 sequenceDiagram
     participant Client as Client
     participant Gateway as API Gateway
+    participant Validator as Webhook Validator
     participant Temp as Temporal Cluster
     participant Worker as Agent Worker
     participant LLM as External LLM
-    participant Auth as HITL Manager
+    participant Auth as HITL Auth
     participant Tool as Target System
 
-    Client->>Gateway: POST /api/v1/agents/{id}/trigger
-    Gateway->>Temp: StartWorkflow (trigger_source=webhook)
+    Client->>Gateway: POST /api/v1/agents/{id}/trigger (X-Signature, Idempotency-Key)
+    Gateway->>Validator: verifyHMAC + deduplicateIdempotency
+    Validator-->>Gateway: valid
+    Gateway->>Temp: StartAgentWorkflow
     Temp->>Worker: Dispatch Activity
     Worker->>LLM: Prompt and Context
-    LLM-->>Worker: Response — Execute Skill
+    LLM-->>Worker: Response Execute Skill
     Worker->>Auth: Check Permissions
-    Auth-->>Worker: MUTATING — Requires Human Approval
-    Worker->>Temp: workflow.wait_condition(approved)
-    Temp-->>Client: Status: AWAITING_HITL
+    Auth-->>Worker: Status Requires Human Approval
+    Worker->>Temp: Pause Workflow Wait for Signal
+    Temp-->>Client: Status AWAITING_HITL
 
-    Client->>Temp: Signal: Approved (mfa_token)
+    Client->>Temp: Send Signal Approved (mfa_token)
     Temp->>Worker: Resume Workflow
     Worker->>Tool: Execute Tool
     Tool-->>Worker: Success
-    Worker->>LLM: Skill Result — Continue
+    Worker->>LLM: Skill Result Success
     LLM-->>Worker: Final Output Generated
-    Worker->>Temp: CompleteWorkflow
+    Worker->>Temp: Complete Workflow
     Temp-->>Client: Return Result
 ```
 
-### 4.2 Hybrid Workflow Execution
-
-Demonstrates a single Temporal workflow moving through deterministic, agentic, and HITL steps sequentially, sharing execution context throughout.
+### 4.2 Agent Team Execution Flow
 
 ```mermaid
 sequenceDiagram
-    participant Client as Client (Webhook)
+    participant Client as Client / Webhook
     participant Gateway as API Gateway
+    participant Validator as Webhook Validator
     participant Temp as Temporal Cluster
-    participant Det as Deterministic Runner
-    participant Worker as Agent Worker
+    participant Orch as Team Orchestrator
+    participant DispA as Sub-Agent Worker A (DB Triage)
+    participant DispB as Sub-Agent Worker B (K8s Inspector)
     participant LLM as External LLM
-    participant Auth as HITL Manager
+    participant HITL as HITL Auth
     participant Tool as Target System
 
-    Client->>Gateway: POST /api/v1/agents/{id}/trigger (webhook)
-    Gateway->>Temp: StartWorkflow (trigger_source=webhook)
+    Client->>Gateway: POST /api/v1/teams/{id}/trigger (X-Signature, Idempotency-Key)
+    Gateway->>Validator: verifyHMAC + deduplicateIdempotency
+    Validator-->>Gateway: valid
+    Gateway->>Temp: StartTeamWorkflow(team_manifest, payload)
+    Temp->>Orch: Dispatch TeamWorkflow
 
-    Note over Temp,Det: Step 1 — Deterministic (no LLM invoked)
-    Temp->>Det: Execute rule evaluation activity
-    Det->>Det: aws_ce_get_cost_and_usage
-    Det->>Det: apply_anomaly_threshold_rules
-    Det-->>Temp: Rule result: anomaly=$3200, proceed=true
+    Orch->>LLM: Decompose goal into sub-tasks
+    LLM-->>Orch: [sub-task-A: query DB, sub-task-B: inspect K8s]
 
-    Note over Temp,Worker: Step 2 — Agentic ReAct
-    Temp->>Worker: Dispatch agentic activity
-    Worker->>LLM: Prompt + structured cost data from Step 1
-    LLM-->>Worker: Reasoning: two m5.2xlarge at 8% CPU — downsize candidate
-    Worker->>LLM: Invoke ec2_modify_instance_type
-    LLM-->>Worker: Tool call confirmed
+    par Parallel Fan-Out
+        Orch->>DispA: StartAgentWorkflow(DB-Triage, sub-task-A)
+    and
+        Orch->>DispB: StartAgentWorkflow(K8s-Inspector, sub-task-B)
+    end
 
-    Note over Temp,Auth: Step 3 — HITL Gate (mutating tool)
-    Worker->>Auth: ec2_modify_instance_type is mutating
-    Auth-->>Worker: Approval required — blocking mode (trigger_source=webhook)
-    Worker->>Temp: workflow.wait_condition(approved)
-    Temp-->>Client: Status: AWAITING_HITL
+    DispA->>LLM: ReAct loop - query slow logs
+    LLM-->>DispA: finding: slow_query on prod-rds-01
+    DispA-->>Orch: Result{slow_query}
 
-    Client->>Temp: Signal: Approved (mfa_token)
-    Temp->>Worker: Resume
+    DispB->>LLM: ReAct loop - check pod events
+    DispB->>HITL: Tool restart_k8s_pod is mutating — suspend
+    HITL-->>Orch: TeamHITL triggered by Worker B
 
-    Note over Temp,Det: Step 4 — Deterministic Execution
-    Worker->>Det: Execute deterministic skill chain
-    Det->>Tool: snapshot → stop → resize → start → health_check
-    Tool-->>Det: All steps succeeded
-    Det-->>Worker: Chain complete
+    Orch->>Temp: PauseTeamWorkflow (all branches suspend)
+    Temp-->>Client: Status AWAITING_HITL
 
-    Worker->>Temp: CompleteWorkflow
-    Temp-->>Client: Return result
+    Client->>Temp: Signal Approved (mfa_token)
+    Temp->>DispB: Resume
+    DispB->>Tool: execute restart_k8s_pod
+    Tool-->>DispB: Success
+    DispB-->>Orch: Result{oom_resolved}
+
+    Orch->>LLM: Synthesize [slow_query + oom_resolved]
+    LLM-->>Orch: Final incident report
+    Orch->>Temp: CompleteTeamWorkflow(report)
+    Temp-->>Client: Return Result
 ```
 
-### 4.3 Scheduled Workflow with Async HITL
-
-Demonstrates a schedule-triggered workflow with no interactive session. HITL approval is delivered asynchronously to Slack/email because no user is present to approve in real time.
+### 4.3 Tool Registration and Skill Publication
 
 ```mermaid
 sequenceDiagram
-    participant Sched as Temporal Schedule Engine
-    participant SchedSvc as Schedule Service
-    participant WI as Workflow Initiator
-    participant Det as Deterministic Runner
-    participant Worker as Agent Worker (Team)
-    participant LLM as External LLM
-    participant Auth as HITL Manager
-    participant Notify as Async Notifier
-    participant Approver as Approver (Slack / Studio UI)
+    participant Eng as Platform Engineer
+    participant PR as GitHub PR
+    participant Bot as Security Scanner
+    participant Admin as Security Team
+    participant Registry as Tool Registry
+    participant Dev as Skill Developer
+    participant Studio as Agent Studio
+    participant Catalog as Skill Catalog
+    participant DB as PostgreSQL
 
-    Note over Sched: cron fires: "0 18 * * 5"
-    Sched->>WI: StartWorkflow(schedule_id, rendered_payload, trigger_source=scheduled)
-    WI->>SchedSvc: RecordRunStart(schedule_id, workflow_id)
+    Eng->>PR: Submit tool spec (JSON schema, auth_level, sandbox_req)
+    Bot->>PR: Automated threat surface scan (prompt injection, lateral movement)
+    Admin->>Registry: POST /tools (approve)
+    Registry->>DB: INSERT tool@v1.0.0 status=approved
 
-    Note over WI,Det: Step 1 — Deterministic batch extraction (no LLM)
-    WI->>Det: Dispatch deterministic activity
-    Det->>Det: aws_ce_get_cost_and_usage
-    Det->>Det: aws_compute_optimizer_fetch
-    Det->>Det: aws_trusted_advisor_fetch
-    Det-->>WI: Structured cost data package
-
-    Note over Worker,LLM: Step 2 — Agentic team analysis (parallel sub-agents)
-    WI->>Worker: Dispatch team agentic activity
-    Worker->>LLM: Waste Analyst + Right-Sizing Analyst + Commitment Analyst (parallel)
-    LLM-->>Worker: Tiered recommendation set (auto / team-lead / dual sign-off)
-
-    Note over Worker,Auth: Step 3 — Async HITL (trigger_source=scheduled, no interactive session)
-    Worker->>Auth: Mutating tools detected — tier 2 and tier 3 actions
-    Auth->>Notify: Dispatch Slack + email to hitl_notify_targets
-    Notify-->>Approver: Slack message with approval deep link
-    Worker->>Temp: workflow.wait_condition(approved, timeout=72h)
-
-    Approver->>Worker: Approve via Agent Studio UI (MFA)
-    Worker->>Worker: Resume — execute deterministic change chains per approved action
-
-    Note over Worker,SchedSvc: Step 4 — Outcome recording
-    Worker->>SchedSvc: RecordRunEnd(schedule_id, status=completed, savings_realized)
-    SchedSvc->>SchedSvc: Update last_successful_run_time
-    Worker->>Worker: Publish Confluence report + update Vector DB
+    Dev->>Studio: Open Skill Builder
+    Studio->>Registry: GET /tools?status=approved
+    Registry-->>Studio: approved tools list
+    Dev->>Studio: Compose tool + SOP, set RBAC flags (mutating: true)
+    Studio->>Catalog: POST /skills {name, version: 1.0.0, tools, sop, rbac}
+    Catalog->>DB: INSERT skill@v1.0.0 status=active
+    Catalog-->>Studio: 201 Created
+    Note over Studio: Skill immediately visible in catalog for No-Code users
 ```
 
 ## 5. Deployment Topology
-- **High Availability**: Deployments are spread across multiple Availability Zones using EKS topology spread constraints. Schedule Service Pods run with a minimum of 2 replicas across AZs — a single pod outage does not affect Temporal Schedule delivery since Temporal owns the firing clock.
-- **Scaling**: Temporal Worker Pods scale horizontally via HPA based on Temporal task queue depth. Schedule Service Pods scale on CPU/RPS. Scheduled workflow bursts (e.g., many schedules firing simultaneously at market open) are absorbed by the Worker HPA before the agentic phase begins.
-- **Observability**: OTel Collector Daemons run on every EKS node, silently capturing all traces and exporting them to the central observability stack (Prometheus/Grafana). The Agent Studio pulls from this stack to display hybrid execution graphs with step-type colour coding. `trigger_source` is emitted as a span attribute on every workflow trace, enabling cost and latency breakdown by invocation mode in the Operations Dashboard.
+- **High Availability**: All pods spread across multiple Availability Zones via EKS topology spread constraints. All stateful services (RDS, ElastiCache) run Multi-AZ. Route53 health checks flip traffic to a standby region if the primary ALB is unhealthy for 5+ consecutive minutes.
+- **Scaling**: Agent Worker and Team Orchestrator Pods each have independent HPAs driven by their respective Temporal task-queue depths. Sub-Agent Registry and Skill Dispatcher Pods scale on CPU/RPS. Cost Attribution Pods scale on Kafka consumer lag.
+- **Service Mesh**: Istio sidecar injection enabled on all namespaces. `PeerAuthentication` set to `STRICT` — all pod-to-pod communication requires mTLS. `cert-manager` rotates mTLS certificates every 30 days automatically.
+- **Deployment Strategy**: Argo Rollouts manages canary (10% → 25% → 100%) and blue-green rollouts for Agent Manifests, Skills, and Sub-Agent contracts. Automated analysis rules check workflow success rate and p99 latency; rollback fires automatically if success rate drops more than 10% over 10 minutes.
+- **Observability**: OTel Collector Daemons run on every EKS node. Traces export to Prometheus/Grafana/Jaeger. The Cost Attribution Service consumes OTel spans from a Kafka topic to produce per-tenant, per-skill cost records. Agent Studio queries these stacks for the Operations Dashboard and Execution Trace Visualizer.
 
 ## 6. Detailed Tech Stack Choices
 
-- **Frontend (Agent Studio UI)**: React with Next.js for SSR and fast routing. Tailwind CSS for styling. React Flow for the Visual Manifest Builder and Execution Trace Visualizer — node colour coding differentiates deterministic (grey), agentic (blue), and HITL (orange) steps.
-- **API Gateway & Routing**: Go (Gin or Echo) for high concurrency, low latency, and efficient payload mapping.
-- **Orchestration**: Temporal workflow engine for durable execution. Go Temporal SDK for the Workflow Initiator; Python Temporal SDK for the Agent Workers (to leverage the Python AI ecosystem). **Temporal Schedules API** (not the deprecated `CronSchedule` workflow field) for scheduled triggers — provides built-in overlap policy, backfill, and jitter.
-- **AI Agent Framework**: **Pydantic AI** (via the `py-agent-core` adapter interface). The platform uses Pydantic AI as the concrete agent framework for typed agent and tool definitions, dependency injection via `RunContext`, and structured output validation. Critically, `agent-workers` never imports Pydantic AI directly — it imports only from `py-agent-core`, which owns the framework binding. The active framework is selected at runtime via the `AGENT_FRAMEWORK` environment variable. This decouples the Temporal execution layer from any specific framework, making a future migration to OpenAI Agents SDK (or any other OpenAI-compatible framework) a single-file adapter change with no modifications to `workflows.py` or tool implementations. Deterministic steps bypass the framework entirely and invoke the Skill Dispatcher directly.
-- **LLM Gateway & Inference Proxy**: A centralized router (LiteLLM) handling load balancing, token governance, and API schema standardization. Bridges to external endpoints (OpenAI, Bedrock) or locally hosted endpoints (vLLM, Ollama, LMStudio).
-- **State & Persistence**: PostgreSQL (via Amazon RDS) for Temporal state, platform metadata, and schedule tables. Amazon ElastiCache (Redis) for short-term session cache, rate limiting, and idempotency key deduplication.
-- **Sandboxed Execution**: Ephemeral Docker Containers for executing untrusted tool code securely.
-- **Observability**: OTel collectors on EKS nodes reporting to Prometheus/Grafana/Jaeger. `trigger_source` and `step_type` emitted as span attributes for hybrid/scheduled workflow breakdown.
+- **Frontend (Agent Studio UI)**: Next.js (App Router) for SSR and fast routing. Tailwind CSS for styling. React Flow for the Visual Manifest Builder, Team Canvas, and Execution Trace Visualizer DAG with swimlane support.
+- **API Gateway & Routing**: Go (net/http or Gin) for high concurrency and low latency. HMAC-SHA256 webhook validation middleware implemented using Go's `crypto/hmac` stdlib (constant-time comparison).
+- **Orchestration**: Temporal workflow engine for durable execution. Go Temporal SDK for the Workflow Initiator; Python Temporal SDK for Agent Workers and Team Orchestrator (to leverage the Python AI ecosystem).
+- **AI Agent Framework**: Provider-agnostic reasoning loop. Model selection is configurable per sub-agent (`model` field in sub-agent contract). The platform routes through the LLM Gateway rather than binding to any single SDK. Temporal workflow extensions ensure durability of ReAct loops regardless of provider.
+- **LLM Gateway & Inference Proxy**: LiteLLM handling load balancing, token governance, and API schema normalization. Bridges to external endpoints (OpenAI, Anthropic, Bedrock) or locally hosted endpoints (vLLM, Ollama, LMStudio).
+- **Service Mesh**: Istio with `cert-manager` for automatic mTLS certificate issuance and 30-day rotation. `PeerAuthentication: STRICT` enforced cluster-wide.
+- **Deployment Strategy**: Argo Rollouts for canary and blue-green rollouts with automated metric-based analysis and rollback.
+- **State & Persistence**: PostgreSQL (Amazon RDS) with per-tenant schemas, Row-Level Security, pgvector extension, and TimescaleDB extension for cost time-series data. Amazon ElastiCache (Redis) for session cache and idempotency key deduplication.
+- **Secret Management**: AWS Secrets Manager with per-secret rotation lambdas. External Secrets Operator (ESO) syncs secrets into Kubernetes with zero-downtime rolling restarts.
+- **Sandboxed Execution**: Ephemeral Docker Containers with blocked lateral network movement. Destroyed immediately post-execution.
+- **Observability**: OTel collectors on every EKS node reporting to Prometheus/Grafana/Jaeger. Cost Attribution Service consumes OTel spans from Kafka to produce per-tenant/agent/skill cost records in TimescaleDB.
 
 ## 7. Project Structure (Monorepo)
 
 ```text
 agentic-paas/
 ├── apps/
-│   ├── agent-studio/         # Next.js frontend (Agent Builder, Skill Catalog,
-│   │                         #   Schedule Builder, Hybrid Trace Visualizer)
-│   └── platform-gateway/     # Go public API Gateway
+│   └── agent-studio/              # Next.js frontend (Agent Builder, Skill Builder,
+│                                  #   Sub-Agent Registry, Team Builder, Ops Dashboard)
 ├── services/
-│   ├── workflow-initiator/   # Go — Temporal workflow dispatcher (trigger_source routing)
-│   ├── agent-workers/        # Python — Temporal workers (ReAct loop + deterministic runner)
-│   ├── schedule-service/     # Go — schedule CRUD, Temporal Schedule API, payload templating
-│   ├── context-hydrator/     # Go/Python — Vector DB queries, skill SOP injection
-│   └── internal-tools/       # Go microservices for primitive platform tools
+│   ├── api-gateway/               # Go — REST/gRPC entry point, HMAC validation, RBAC
+│   ├── workflow-initiator/        # Go — Temporal workflow dispatcher (agent + team)
+│   ├── agent-workers/             # Python — single-agent Temporal workers (ReAct loop)
+│   ├── team-orchestrator/         # Python — team Temporal workers (decompose, fan-out, synthesize)
+│   ├── sub-agent-registry/        # Go — sub-agent contract storage and versioning
+│   ├── skill-dispatcher/          # Go — slash-command parsing, hook execution, tool routing
+│   ├── cost-attribution/          # Go — OTel span consumer, quota enforcement, cost reporting
+│   ├── context-hydrator/          # Go/Python — vector DB queries, skill SOP injection
+│   ├── sandbox-manager/           # Go — ephemeral Docker container lifecycle
+│   └── llm-gateway/               # Go — LiteLLM proxy, per-sub-agent model routing
 ├── packages/
-│   ├── shared-protos/        # Protocol Buffers / gRPC definitions
-│   ├── skill-sdk/            # Internal SDK for defining new tool schemas
-│   └── py-agent-core/        # Python — AgentRunner interface, PlatformTool protocol,
-│                             #   Pydantic AI adapter (active), OpenAI Agents adapter (future),
-│                             #   factory.py (AGENT_FRAMEWORK env var routing)
+│   ├── go-shared/                 # Shared Go models (AgentManifest, TeamManifest, SubAgentContract)
+│   ├── shared-protos/             # Protocol Buffers / gRPC definitions
+│   ├── hook-engine/               # Go — shared pre/post skill hook registration and execution
+│   ├── webhook-security/          # Go — shared HMAC validation middleware
+│   ├── team-sdk/                  # Python — Team Manifest schema, sub-agent client helpers
+│   └── skill-sdk/                 # Internal SDK for defining tool schemas
 ├── infra/
-│   ├── terraform/            # AWS VPC, RDS (with schedule tables), EKS, ElastiCache
-│   └── k8s/                  # Kubernetes Deployments / Helm charts
-└── docs/                     # Architecture and technical specs
+│   ├── terraform/                 # AWS VPC, RDS (with RLS), EKS, ElastiCache, S3, Secrets Manager
+│   │   └── secrets-rotation/      # AWS Secrets Manager rotation lambda configs
+│   ├── k8s/
+│   │   ├── deployments/           # Kubernetes Deployment / Service manifests
+│   │   ├── istio/                 # PeerAuthentication, AuthorizationPolicy, VirtualService
+│   │   └── argo-rollouts/         # Canary / blue-green Rollout definitions
+│   └── local/                     # docker-compose for local development
+└── docs/                          # Architecture and technical specs
 ```
 
 ## 8. Core Service Descriptions
 
-- **Platform Gateway**: The edge entry point. Handles SSO authentication (OIDC/SAML), role-based access control, rate limiting, and translates webhook events into standard platform events. Proxies schedule management requests to the Schedule Service.
-- **Workflow Initiator & API**: Serves traffic from the Agent Studio (saving manifests, retrieving logs) and submits workflow configurations to the Temporal Cluster. Exclusively owns `manifest-db` (PostgreSQL) — the authoritative store for agent manifests, skill definitions, and RBAC rules. Accepts `trigger_source` (`webhook`, `chat`, `scheduled`) and passes it forward as workflow context for downstream behavioral differentiation.
-- **Agent Workers (Python)**: The heavy-lifting compute nodes horizontally scaled using HPA. Listen to Temporal task queues and execute either the ReAct reasoning loop (for agentic manifest steps) or a deterministic skill chain (for non-agentic steps). Import exclusively from `py-agent-core` — never from `pydantic_ai` or `openai-agents` directly — ensuring the Temporal execution layer is fully decoupled from the framework choice. Use `trigger_source` to select blocking vs. async HITL mode.
-- **Schedule Service (Go)**: Manages the full lifecycle of scheduled workflow triggers. Exclusively owns `schedule-db` (PostgreSQL) — no other service connects to this database. Stores schedule definitions (`workflow_schedules`) and run history (`schedule_run_history`). Owns all Temporal Schedule API calls (create, update, delete, pause, resume, backfill). Renders payload templates with time variables (`{{.ScheduledTime}}`, `{{.LastSuccessfulRunTime}}`) at fire time before calling the Workflow Initiator. Exposes management endpoints consumed by Agent Studio and the external REST API.
-- **LLM Gateway Router**: The unified proxy that Worker nodes channel inferences through. Standardizes API formats, manages token budgets, and routes to local or cloud providers. Never invoked by deterministic steps.
-- **Tool Proxy / Sandbox Manager**: An isolation service that workers call to safely execute arbitrary code or query internal systems via strict egress-controlled ephemeral Docker containers. Called by both agentic and deterministic steps.
-- **Observability Sink**: Unified OTel daemon collectors picking up structured logs and metrics mapping them to execution histories. `trigger_source` and `step_type` attributes enable per-mode cost and performance breakdown in the Operations Dashboard.
+- **API Gateway (Go)**: Edge entry point. Validates HMAC-SHA256 signatures on webhook events, enforces per-tenant quotas, issues scoped short-lived OIDC tokens for agent executions, handles SSO authentication (OIDC/SAML), and routes to the Workflow Initiator.
+- **Workflow Initiator (Go)**: Translates platform-level manifest IDs into Temporal workflow requests. Routes single-agent triggers to `AgentWorkflow` and team triggers to `TeamWorkflow`. Handles idempotency: duplicate `session_id` values within 24 hours return the cached workflow response.
+- **Agent Workers (Python)**: Single-agent Temporal workers. Listen to per-tenant agent task queues, execute the durable ReAct loop (recall → reason → act → observe → learn), and handle HITL signal suspension.
+- **Team Orchestrator (Python)**: Team Temporal workers. Implement `TeamWorkflow`: decompose the goal via LLM, fan out to sub-agents via the Sub-Agent Dispatcher, collect typed results, and synthesize a unified response. Propagates HITL suspension team-wide when any sub-agent triggers a mutating action.
+- **Sub-Agent Registry (Go)**: Stateless CRUD service backed by PostgreSQL. Stores versioned sub-agent contracts (persona, `allowed_skills`, `model`, `max_iterations`, typed I/O schema). Serves capability contract lookups to the Team Orchestrator and parent Agent Workers at workflow start.
+- **Skill Dispatcher (Go)**: Receives skill invocations (slash-command or structured tool call), validates arguments against skill input schemas, fires pre/post hooks via the Hook Engine, and routes tool chains to the Tool Router. Acts as the governed command interface between reasoning and execution.
+- **Cost Attribution Service (Go)**: Consumes OTel spans from a Kafka topic. Aggregates LLM token counts, sandbox execution time, and Vector DB ops by (tenant_id, agent_id, skill_id) into TimescaleDB. Enforces quota limits in real time; returns `429 QuotaExceeded` on hard limit breach.
+- **Context Hydrator (Go/Python)**: Queries tenant-partitioned pgvector for semantically relevant long-term memories and injects Skill SOPs into the agent's system prompt before each LLM reasoning step.
+- **LLM Gateway (Go / LiteLLM)**: Unified inference proxy. Normalizes API formats across providers. Routes per-sub-agent model selections. Enforces token budget limits. Supports fallback to local Ollama/vLLM endpoints for data-sovereign deployments.
+- **Sandbox Manager (Go)**: Provisions ephemeral Docker containers with blocked egress for arbitrary tool code execution. Destroys containers immediately post-execution. Returns structured stdout/stderr payloads to the calling worker.
+- **Observability Sink**: OTel Collector Daemons on each EKS node. Export structured traces, logs, and metrics to Prometheus/Grafana/Jaeger. Team execution traces include sub-agent swimlane metadata for DAG rendering in Agent Studio.
 
 ## 9. Low-Level Component Design & API Contracts
 
 ### 9.1 Database & Persistence Specifications
+- **Relational DB (Amazon RDS - PostgreSQL)**: Primary source of truth.
+  - Temporal backend state (workflow histories, task queues).
+  - Platform configuration (agent manifests, skill definitions, sub-agent contracts, team manifests, RBAC rules).
+  - Per-tenant schemas with Row-Level Security: `SET LOCAL app.tenant_id = '...'` on every transaction; RLS policies enforce `tenant_id = current_setting('app.tenant_id')`.
+  - TimescaleDB extension for cost attribution time-series (`cost_events` hypertable, partitioned by time).
+- **Vector Database (pgvector via RDS)**: Tenant-partitioned embeddings for long-term agent and team memory. Team members can access shared memory partitions or isolated per-agent partitions, configured in the Team Manifest.
+- **Cache (Amazon ElastiCache - Redis)**: All keys namespaced by `{tenant_id}:` to prevent cross-tenant cache pollution.
+  - Global rate limiting.
+  - Short-term conversational memory buffering.
+  - Webhook idempotency key deduplication (24h TTL per key).
+  - Ephemeral session state lock management.
 
-Each microservice exclusively owns its persistence layer. No service may connect to another service's database directly — all cross-service data access goes through the owning service's API.
+**Key New Schema Objects:**
 
-| Database | Owner Service | Engine | Stores |
-|---|---|---|---|
-| `temporal-db` | Temporal Cluster | RDS PostgreSQL | Workflow histories, task queues, activity state — managed entirely by Temporal; no platform service connects here |
-| `manifest-db` | `workflow-initiator` | RDS PostgreSQL | Agent manifests, skill definitions, RBAC policies, tenant configuration |
-| `schedule-db` | `schedule-service` | RDS PostgreSQL | `workflow_schedules`, `schedule_run_history` |
-| `memory-db` | `context-hydrator` | RDS PostgreSQL + pgvector | Long-term agent memories, RAG embeddings |
-| `gateway-cache` | `platform-gateway` | ElastiCache Redis | Rate limiting counters, idempotency keys, short-term session buffers |
+```sql
+-- Sub-Agent contracts (versioned)
+CREATE TABLE sub_agent_contracts (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id     UUID NOT NULL,
+  name          TEXT NOT NULL,
+  version       TEXT NOT NULL,  -- semver string
+  persona       TEXT,
+  allowed_skills JSONB,         -- [{name, version}]
+  model         TEXT,
+  max_iterations INT DEFAULT 10,
+  input_schema  JSONB,
+  output_schema JSONB,
+  status        TEXT CHECK (status IN ('draft','staged','active','paused','archived')),
+  created_at    TIMESTAMPTZ DEFAULT now()
+);
 
-**Access rules enforced at the IAM / security-group layer:**
-- Each service's RDS instance is in a dedicated security group. Only the owning service's pod IAM role has inbound permission on port 5432.
-- `gateway-cache` Redis ACLs restrict keyspace access to `platform-gateway` and `context-hydrator` (session reads only) pod identities.
-- The Temporal Cluster's security group blocks all platform service pods — Temporal SDK gRPC (port 7233) is the only allowed entry point.
+-- Immutable lifecycle audit log (all four tiers)
+CREATE TABLE lifecycle_events (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  resource_type TEXT NOT NULL,  -- 'tool'|'skill'|'sub_agent'|'agent'|'team'
+  resource_id   UUID NOT NULL,
+  tenant_id     UUID NOT NULL,
+  from_state    TEXT,
+  to_state      TEXT NOT NULL,
+  actor         TEXT NOT NULL,
+  reason        TEXT,
+  created_at    TIMESTAMPTZ DEFAULT now()
+);
 
-**Cross-service data access patterns (API-only, never direct DB):**
-- `workflow-initiator` needs schedule metadata → calls `GET /api/v1/schedules/{id}` on `schedule-service`.
-- `agent-workers` need long-term memory → call `context-hydrator` gRPC endpoint; never touch `memory-db` directly.
-- `schedule-service` needs manifest details to validate schedule targets → calls `workflow-initiator` gRPC endpoint.
+-- Cost attribution (TimescaleDB hypertable)
+CREATE TABLE cost_events (
+  time          TIMESTAMPTZ NOT NULL,
+  tenant_id     UUID,
+  agent_id      UUID,
+  skill_id      UUID,
+  tokens_in     INT,
+  tokens_out    INT,
+  sandbox_ms    INT,
+  vector_ops    INT
+);
+SELECT create_hypertable('cost_events', 'time');
+```
 
 ### 9.2 Service Languages & Protocols
-- **Agent Studio <--> Gateway**: `REST/JSON` over HTTPS.
-- **Gateway <--> Internal Services**: Internal `gRPC` over HTTP/2 using Protobuf schemas.
-- **Workflow Initiator <--> Temporal Workers**: Native `gRPC` via Temporal SDK.
-- **Temporal Workers <--> Internal Microservices**: `gRPC` or `REST` via the Tool Router.
-- **Temporal Workers <--> LLM Provider**: `REST/HTTPS` using the standard OpenAI SDK format.
-- **Schedule Service <--> Temporal**: Temporal Go SDK `ScheduleClient` — no HTTP, native SDK calls.
+Explicitly decoupled communication boundaries:
+- **Agent Studio <--> Gateway**: `REST/JSON` over HTTPS. Optimized for standard browser interactions.
+- **Gateway <--> Internal Services**: Internal `gRPC` over HTTP/2 using Protobuf schemas. Ensures strict typings, generated client stubs, and multiplexed performance.
+- **Workflow Initiator <--> Temporal Workers**: Native `gRPC` via Temporal SDK bridging through the Temporal Cluster.
+- **Temporal Workers <--> Internal Microservices**: `gRPC` or `REST` depending on legacy integrations, executed via the Tool Router.
+- **Temporal Workers <--> LLM Provider**: `REST/HTTPS` mapping directly to provider APIs exclusively using the standard OpenAI SDK format.
 
 ### 9.3 Component Interface Definitions (API Docs)
 
-**1. External REST API (Webhook Trigger)**
+**1. External REST API (Webhook Trigger — Agent)**
+Inbound request from an external observability system triggering a single agent. HMAC and idempotency are required.
 
 ```http
 POST /api/v1/agents/{agent_id}/trigger
 Content-Type: application/json
 Authorization: Bearer <OIDC_TOKEN>
+X-Signature: sha256=<HMAC_SHA256(request_body, tenant_secret)>
+X-Timestamp: 1714000000
+Idempotency-Key: <uuid-or-deterministic-hash>
 
 {
   "event_source": "datadog-monitor",
@@ -451,55 +552,44 @@ Authorization: Bearer <OIDC_TOKEN>
 }
 ```
 
-**2. Schedule Management REST API**
+Rejection responses:
+- `401 Unauthorized` — missing or invalid `X-Signature`
+- `400 ReplayDetected` — `X-Timestamp` older than 300 seconds
+- `200 OK` (no new workflow) — duplicate `Idempotency-Key` within 24 hours; body contains cached `workflow_id`
+
+**2. External REST API (Team Trigger)**
+Triggering an Agent Team follows the same security contract:
 
 ```http
-POST   /api/v1/schedules                    # Create schedule
-GET    /api/v1/schedules                    # List (filter: target_type, status)
-GET    /api/v1/schedules/{id}               # Fetch + next 5 run times
-PUT    /api/v1/schedules/{id}               # Update (propagates to Temporal Schedule)
-DELETE /api/v1/schedules/{id}               # Archive + delete Temporal Schedule
+POST /api/v1/teams/{team_id}/trigger
+X-Signature: sha256=<HMAC_SHA256(body, tenant_secret)>
+X-Timestamp: 1714000000
+Idempotency-Key: <uuid>
 
-POST   /api/v1/schedules/{id}/pause         # Pause
-POST   /api/v1/schedules/{id}/resume        # Resume
-POST   /api/v1/schedules/{id}/trigger       # Immediate manual trigger
-POST   /api/v1/schedules/{id}/backfill      # Run for specific past time range
-GET    /api/v1/schedules/{id}/history       # Per-run history with status
-GET    /api/v1/schedules/{id}/next-runs     # Preview next N scheduled fire times
+{ "payload": { "incident_id": "INC-442", "severity": "P1" } }
 ```
 
-Schedule create request body:
+**3. Sub-Agent Registry REST API**
 
-```json
-{
-  "name": "Weekly AWS Cost Optimization",
-  "target_type": "agent",
-  "target_id": "550e8400-e29b-41d4-a716-446655440000",
-  "cron_expression": "0 18 * * 5",
-  "timezone": "Asia/Kolkata",
-  "blackout_windows": [
-    { "dates": ["2025-12-25", "2026-01-01"] },
-    { "time_ranges": [{ "start": "09:15", "end": "15:30", "days": ["MON","TUE","WED","THU","FRI"] }] }
-  ],
-  "jitter_seconds": 300,
-  "overlap_policy": "SKIP",
-  "catchup_window_sec": 3600,
-  "payload_template": {
-    "analysis_window": {
-      "start": "{{.LastSuccessfulRunTime | iso8601}}",
-      "end":   "{{.ScheduledTime | iso8601}}"
-    },
-    "report_label": "week-ending-{{.ScheduledTime | date \"2006-01-02\"}}"
-  },
-  "hitl_mode": "ASYNC_NOTIFY",
-  "hitl_notify_targets": [
-    { "type": "slack_channel", "id": "C08FINOPS" },
-    { "type": "email", "address": "finops-lead@company.com" }
-  ]
-}
+```http
+POST   /api/v1/sub-agents                    # Register sub-agent contract
+GET    /api/v1/sub-agents/{id}               # Resolve contract by ID
+GET    /api/v1/sub-agents?status=active      # List (filter by skill, status, tenant)
+PUT    /api/v1/sub-agents/{id}               # Publish new version
+POST   /api/v1/sub-agents/{id}/transition    # State machine transition (staged→active, etc.)
 ```
 
-**3. Internal gRPC Interface (Workflow Initiator)**
+**4. Team Manifest REST API**
+
+```http
+POST   /api/v1/teams                         # Create team manifest
+GET    /api/v1/teams/{id}                    # Fetch manifest
+GET    /api/v1/teams/{id}/status             # Execution status
+POST   /api/v1/teams/{id}/deploy             # Deploy (body: {strategy: canary|blue-green|all-at-once})
+```
+
+**5. Internal gRPC Interface (Workflow Initiator)**
+Updated Protobuf adding team workflow support alongside the original agent session RPC:
 
 ```protobuf
 syntax = "proto3";
@@ -507,16 +597,22 @@ package platform.workflow.v1;
 
 service WorkflowInitiator {
   rpc StartAgentSession(StartAgentRequest) returns (StartAgentResponse);
-  rpc GetSessionStatus(StatusRequest)     returns (StatusResponse);
+  rpc StartTeamSession(StartTeamRequest) returns (StartTeamResponse);
+  rpc GetSessionStatus(StatusRequest) returns (StatusResponse);
 }
 
 message StartAgentRequest {
-  string agent_id      = 1;
-  string session_id    = 2;   // idempotency key
-  string tenant_id     = 3;
+  string agent_id  = 1;
+  string session_id = 2;              // idempotency key
+  string tenant_id = 3;
   map<string, string> context = 4;
-  string trigger_source = 5;  // "webhook" | "chat" | "scheduled"
-  string schedule_id   = 6;   // populated when trigger_source = "scheduled"
+}
+
+message StartTeamRequest {
+  string team_id   = 1;
+  string session_id = 2;              // idempotency key
+  string tenant_id = 3;
+  map<string, string> context = 4;
 }
 
 message StartAgentResponse {
@@ -524,264 +620,57 @@ message StartAgentResponse {
   string run_id      = 2;
   string status      = 3;
 }
+
+message StartTeamResponse {
+  string workflow_id   = 1;
+  string run_id        = 2;
+  string status        = 3;
+  repeated string sub_workflow_ids = 4;
+}
 ```
 
 ### 9.4 Temporal Worker Internal Design (Python)
-
-The Worker uses `py-agent-core` as its only framework dependency. The `AGENT_FRAMEWORK` environment variable controls which concrete adapter is loaded at process start — `workflows.py` and all tool implementations are unchanged when switching frameworks.
-
-**Layered architecture:**
-
-```
-workflows.py  (@workflow.defn)
-    │  calls Temporal activities only — no framework imports
-    ▼
-activities_agent.py  (@activity.defn)
-    │  imports from py_agent_core only
-    ▼
-py_agent_core.factory.create_runner(manifest, tools)
-    │  reads AGENT_FRAMEWORK env var
-    ├── adapters/pydantic_ai.py   ← active
-    └── adapters/openai_agents.py ← future swap
-```
-
-**Stable interface contract (`py-agent-core/interfaces.py`):**
-
-```python
-class PlatformContext:
-    agent_id: str
-    session_id: str
-    memories: list[str]
-    trigger_source: Literal['chat', 'webhook', 'scheduled']
-
-class AgentResult:
-    output: str
-    tool_calls_made: list[ToolCall]
-    usage: TokenUsage           # forwarded to Cost Attribution
-    messages: list[dict]        # full history forwarded to OTel
-
-class PlatformTool(Protocol):
-    name: str
-    description: str
-    input_schema: dict
-    async def execute(self, ctx: PlatformContext, **kwargs) -> str: ...
-
-class AgentRunner(ABC):
-    @classmethod
-    @abstractmethod
-    def from_manifest(cls, manifest: AgentManifest,
-                      tools: list[PlatformTool]) -> 'AgentRunner': ...
-
-    @abstractmethod
-    async def run(self, input: str, ctx: PlatformContext) -> AgentResult: ...
-```
-
-**Pydantic AI adapter (active, `adapters/pydantic_ai.py`):**
-
-```python
-from pydantic_ai import Agent as _PydanticAgent, RunContext
-from ..interfaces import AgentRunner, AgentResult, PlatformContext
-
-class PydanticAIRunner(AgentRunner):
-
-    @classmethod
-    def from_manifest(cls, manifest, tools):
-        pydantic_tools = [cls._adapt_tool(t) for t in tools]
-        agent = _PydanticAgent(
-            model=manifest.model,          # e.g. "openai:gpt-4o" → LiteLLM gateway
-            system_prompt=manifest.system_prompt,
-            tools=pydantic_tools,
-            deps_type=PlatformContext,
-        )
-        return cls(agent)
-
-    async def run(self, input: str, ctx: PlatformContext) -> AgentResult:
-        result = await self._agent.run(input, deps=ctx)
-        return AgentResult(
-            output=str(result.data),
-            usage=TokenUsage(input=result.usage().request_tokens,
-                             output=result.usage().response_tokens),
-            messages=result.all_messages_json(),
-        )
-
-    @staticmethod
-    def _adapt_tool(tool: PlatformTool):
-        async def _fn(ctx: RunContext[PlatformContext], **kwargs) -> str:
-            return await tool.execute(ctx.deps, **kwargs)
-        _fn.__name__ = tool.name
-        _fn.__doc__ = tool.description
-        return _fn
-```
-
-**OpenAI Agents SDK adapter (future, `adapters/openai_agents.py`):**
-
-```python
-from agents import Agent as _OAIAgent, Runner, function_tool
-from ..interfaces import AgentRunner, AgentResult, PlatformContext
-
-class OpenAIAgentsRunner(AgentRunner):
-
-    @classmethod
-    def from_manifest(cls, manifest, tools):
-        oai_tools = [cls._adapt_tool(t) for t in tools]
-        agent = _OAIAgent(
-            name=manifest.name,
-            instructions=manifest.system_prompt,
-            tools=oai_tools,
-            model=manifest.model,
-        )
-        return cls(agent)
-
-    async def run(self, input: str, ctx: PlatformContext) -> AgentResult:
-        result = await Runner.run(self._agent, input)
-        return AgentResult(output=result.final_output, ...)
-
-    @staticmethod
-    def _adapt_tool(tool: PlatformTool):
-        @function_tool
-        async def _fn(**kwargs) -> str:
-            return await tool.execute(**kwargs)
-        _fn.__name__ = tool.name
-        return _fn
-```
-
-**Factory — the only place the framework choice lives (`factory.py`):**
-
-```python
-def create_runner(manifest: AgentManifest,
-                  tools: list[PlatformTool]) -> AgentRunner:
-    framework = os.getenv("AGENT_FRAMEWORK", "pydantic_ai")
-    if framework == "pydantic_ai":
-        from .adapters.pydantic_ai import PydanticAIRunner
-        return PydanticAIRunner.from_manifest(manifest, tools)
-    if framework == "openai_agents":
-        from .adapters.openai_agents import OpenAIAgentsRunner
-        return OpenAIAgentsRunner.from_manifest(manifest, tools)
-    raise ValueError(f"Unknown AGENT_FRAMEWORK: {framework}")
-```
-
-**Temporal activity (the only consumer, `activities_agent.py`):**
-
-```python
-from py_agent_core.factory import create_runner
-from py_agent_core.interfaces import PlatformContext
-
-@activity.defn
-async def reasoning_step(manifest: dict, input: str,
-                         memories: list[str], trigger_source: str) -> dict:
-    agent_manifest = AgentManifest(**manifest)
-    tools = ToolRegistry.resolve(agent_manifest.allowed_skills)
-    ctx = PlatformContext(agent_id=agent_manifest.agent_id,
-                          memories=memories, trigger_source=trigger_source)
-    runner = create_runner(agent_manifest, tools)
-    result = await runner.run(input, ctx)
-    return result.model_dump()
-```
-
-**What is unchanged when swapping from Pydantic AI to OpenAI Agents SDK:**
-- `workflows.py` — zero changes
-- All `PlatformTool` implementations — zero changes (pure Python, no framework imports)
-- LLM Gateway — zero changes (both use OpenAI-compatible `base_url`)
-- OTel instrumentation — zero changes (`AgentResult` carries the message history)
-- `activities_agent.py` — zero changes (calls `create_runner`, not the framework)
-
-**What changes during a swap:**
-- `AGENT_FRAMEWORK=openai_agents` in the deployment environment
-- One new adapter file (`adapters/openai_agents.py`) already stubbed above
-- `pyproject.toml` in `py-agent-core`: `pydantic-ai` → `openai-agents`
-
-**Two paths per manifest step, both using this adapter layer:**
-- **Agentic (`step_type: agentic`)**: `reasoning_step` activity invokes `create_runner(...).run(...)`. Temporal retries the activity on failure. HITL suspension via `workflow.wait_condition` happens in `workflows.py`, above the framework layer — framework is never aware of HITL.
-- **Deterministic (`step_type: deterministic`)**: Bypasses `py-agent-core` entirely. The Skill Dispatcher is called directly; no LLM, no framework instantiation.
-
-### 9.5 Schedule Database Schema
-
-```sql
-CREATE TABLE workflow_schedules (
-  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id            UUID NOT NULL,
-  name                 TEXT NOT NULL,
-  description          TEXT,
-  target_type          TEXT NOT NULL CHECK (target_type IN ('agent', 'team')),
-  target_id            UUID NOT NULL,
-  cron_expression      TEXT,           -- mutually exclusive with interval_seconds
-  interval_seconds     INT,
-  timezone             TEXT NOT NULL DEFAULT 'UTC',
-  blackout_windows     JSONB,          -- [{dates:[...]}, {time_ranges:[{start,end,days}]}]
-  jitter_seconds       INT DEFAULT 0,
-  overlap_policy       TEXT NOT NULL DEFAULT 'SKIP'
-                       CHECK (overlap_policy IN ('SKIP','BUFFER_ONE','CANCEL_OTHER','ALLOW_ALL')),
-  catchup_window_sec   INT DEFAULT 3600,
-  payload_template     JSONB,          -- supports {{.ScheduledTime}}, {{.LastSuccessfulRunTime}}
-  hitl_mode            TEXT NOT NULL DEFAULT 'ASYNC_NOTIFY'
-                       CHECK (hitl_mode IN ('ASYNC_NOTIFY','BLOCK_AND_WAIT','AUTO_APPROVE')),
-  hitl_notify_targets  JSONB,          -- [{type:"slack_channel",id:...},{type:"email",address:...}]
-  status               TEXT NOT NULL DEFAULT 'active'
-                       CHECK (status IN ('active','paused','archived')),
-  temporal_schedule_id TEXT,           -- Temporal's internal schedule handle ID
-  created_by           TEXT NOT NULL,
-  created_at           TIMESTAMPTZ DEFAULT now(),
-  updated_at           TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE schedule_run_history (
-  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  schedule_id         UUID NOT NULL REFERENCES workflow_schedules(id),
-  tenant_id           UUID NOT NULL,
-  workflow_id         TEXT,
-  scheduled_time      TIMESTAMPTZ NOT NULL,
-  actual_start_time   TIMESTAMPTZ,
-  end_time            TIMESTAMPTZ,
-  status              TEXT CHECK (status IN ('running','completed','failed','skipped','hitl_pending')),
-  trigger_reason      TEXT,            -- 'scheduled' | 'manual_trigger' | 'backfill'
-  error_message       TEXT,
-  created_at          TIMESTAMPTZ DEFAULT now()
-);
-```
-
-**Payload template variables** rendered by Schedule Service before calling Workflow Initiator:
-
-| Variable | Value |
-|---|---|
-| `{{.ScheduledTime}}` | Nominal fire time (not actual start — important for idempotent data windows) |
-| `{{.ActualStartTime}}` | Wall clock time the workflow actually started |
-| `{{.LastSuccessfulRunTime}}` | Timestamp of last run that completed with `status=completed` |
-| `{{.LastRunTime}}` | Timestamp of last run regardless of status |
-| `{{.ScheduleID}}` | Platform schedule UUID |
-
-**Overlap policy guidance by workflow type:**
-
-| Workflow Type | Recommended Policy | Reason |
-|---|---|---|
-| Reporting / cost analysis | `SKIP` | Two parallel runs for the same period produce duplicate data |
-| Incident remediation sweep | `CANCEL_OTHER` | Latest system state supersedes prior run's findings |
-| Data ingestion / ETL | `BUFFER_ONE` | Cannot skip; queue one catchup run |
+The Worker is implemented iteratively, wrapping the OpenAI Agents SDK into durable Temporal blocks:
+- **Activities (`@activity.defn`)**: Any non-deterministic external calls (e.g., LLM inference, calling the Sandbox Manager, querying PGVector) are wrapped as discrete activities. This ensures the cluster automatically handles timeout retries.
+- **Workflow (`@workflow.defn`)**: The core ReAct loop is implemented as a strict, stateful workflow function. It orchestrates the activities and pauses execution natively using Temporal's `workflow.wait_condition` to suspend itself while awaiting off-system Human-In-The-Loop (HITL) approval signals via the Gateway.
 
 ## 10. Architectural Solutions for Non-Functional Requirements
 
 ### 10.1 Execution Sandboxing (NFR1)
-- **Solution**: The Tool Proxy service isolates mutating capabilities by forwarding untrusted logic to ephemeral Docker container infrastructure. All agent tool execution running arbitrary scripts is natively containerized with restricted egress blocking lateral internal network movement. Deterministic steps use the same sandbox path, ensuring uniform isolation regardless of whether a step is agentic or rule-based.
+- **Solution**: The Tool Proxy service isolates mutating capabilities by forwarding untrusted logic to ephemeral Docker container infrastructure. All agent tool execution running arbitrary scripts is natively containerized with restricted egress blocking lateral internal network movement.
 
 ### 10.2 Immutable Auditability (NFR2)
-- **Solution**: OpenTelemetry (OTel) instrumentation across all Go/Python microservices. Every LLM prompt, context injection, and tool execution is logged with a trace ID. `step_type` (deterministic / agentic / hitl) and `trigger_source` (webhook / chat / scheduled) are emitted as span attributes, enabling the Agent Studio to render hybrid execution graphs with colour-coded step badges and the Operations Dashboard to break down cost and latency by invocation mode.
+- **Solution**: OpenTelemetry (OTel) instrumentation across all Go/Python microservices. Every LLM prompt, context injection, and agent tool execution is logged with a trace ID and exported to an immutable data store (e.g., centralized Prometheus/Grafana stack). The Agent Studio UI queries this trace backend to reconstruct visual DAG graphs for post-incident review.
 
 ### 10.3 Fault Tolerance & Concurrency (NFR3, NFR4)
-- **Solution**: Temporal as the core orchestrator. If an EKS worker node terminates during a hybrid workflow, Temporal resumes execution from the last successfully completed activity — whether that was a deterministic data-extraction step or an agentic LLM call. Pending HITL suspensions survive pod restarts because approval state is stored in Temporal workflow state, not in worker memory.
+- **Solution**: By using **Temporal** as the core orchestrator, the agent ReAct loop executes asynchronously. If an underlying EKS worker node terminates abruptly, Temporal detects the lost heartbeat and restarts the isolated Python execution loop directly from the last successful persisted activity, ensuring massive concurrency and 100% resilience against transient crashes.
 
 ### 10.4 Model Agnosticism (NFR5)
-- **Solution**: All model requests route through the centralized LLM Gateway (LiteLLM). Agent Workers implement one standardized API format; the gateway proxies to any provider. Deterministic steps never invoke the LLM Gateway, so provider changes have zero impact on non-agentic workflow phases.
+- **Solution**: By routing all model requests through an internal centralized **LLM Gateway** (e.g., LiteLLM), the `Agent Workers` only ever implement one standardized API format (like the OpenAI schema). The gateway automatically intercepts the stream and proxies it to Anthropic, Gemini, Azure, or crucially—safely routes sensitive inference requests into isolated local computational nodes running open-source models via **vLLM**, **Ollama**, or **LMStudio**. This inherently completely eradicates vendor lock-in.
 
 ### 10.5 Cost & Token Governance (NFR6)
-- **Solution**: The LLM Gateway enforces per-session token budgets. Agent manifests configure a `max_iterations` ceiling that shuts down the Temporal ReAct loop to prevent infinite generation. Deterministic steps consume no tokens; hybrid workflows therefore have lower and more predictable LLM cost than equivalent fully-agentic workflows. `trigger_source` is recorded on every `cost_events` row, enabling separate cost attribution for scheduled vs. interactive invocations.
+- **Solution**: The **LLM Gateway** functions as a global token choke-point. It intercepts all inbound/outbound tokens and rigorously enforces exact budgets natively. Additionally, hard configurations inside the Agent Manifest govern a "Maximum Tool Execution Count" directly shutting down the Temporal Loop itself to prevent infinite ReAct generation bleed.
 
 ### 10.6 Agent Machine Identities (NFR7)
-- **Solution**: OIDC Identity Federation. Before querying internal microservices, the Temporal Worker authenticates to an internal STS module and exchanges its Agent ID for a short-lived OIDC token (5-minute TTL) scoped to the agent's permitted skill list. The Schedule Service uses its own service-level OIDC identity to call the Temporal Schedule API — schedule ownership is separated from agent execution identity.
+- **Solution**: Standardizing on **OIDC Identity Federation**. Agents do not have statically assigned internal passwords. Before querying internal microservices, the Temporal Worker authenticates itself to an internal STS module, swapping its Agent ID for a short-lived OIDC token (5-minute TTL) containing the agent ID, permitted skill list, and resource constraints. The Tool Router validates token scope before every tool execution; out-of-scope invocations are rejected and logged.
 
-### 10.7 Schedule Reliability (NFR8)
-- **Solution**: Temporal's native Schedules API provides exactly-once invocation guarantees. On platform restart, the `catchup_window_sec` field on each schedule controls how far back Temporal backfills missed runs; runs beyond the window are recorded as `skipped` in `schedule_run_history` with `trigger_reason: missed_catchup_window`. Duplicate firings are suppressed at the Temporal layer via idempotent schedule handles. The Schedule Service is stateless — it reads from PostgreSQL and delegates all timing to Temporal, so Schedule Service pod restarts never result in double-fires.
+### 10.7 Zero-Trust Networking (NFR8)
+- **Solution**: **Istio service mesh** deployed cluster-wide with `PeerAuthentication` set to `STRICT` mode — all pod-to-pod communication requires mTLS; plaintext is rejected. `AuthorizationPolicy` resources enforce call graph constraints (e.g., only `skill-dispatcher` may call `tool-router`; only `team-orchestrator` may call `sub-agent-registry`). `cert-manager` provisions mTLS certificates from an internal CA and rotates them every 30 days via automated `CertificateRequest` renewal. Agent Worker pods have a `NetworkPolicy` allowing egress exclusively to the LLM Gateway and Temporal cluster; all other egress is denied by default.
 
-### 10.8 Hybrid Execution Mode Integrity
-- **Solution**: Step execution mode (`deterministic` vs. `agentic`) is declared in the agent manifest and validated by the Workflow Initiator before the workflow starts. The Temporal Worker enforces the declared mode at activity dispatch time — a step declared `deterministic` cannot invoke the LLM Gateway regardless of what the tool implementation requests. This prevents accidental LLM calls in cost-sensitive or compliance-sensitive pipeline steps, and ensures the Execution Trace Visualizer always reflects the actual execution path rather than an inferred one.
+### 10.8 Webhook Security (NFR9)
+- **Solution**: Go middleware in the API Gateway implements constant-time HMAC-SHA256 comparison (`hmac.Equal`) between the computed `HMAC(requestBody, tenantSecret)` and the `X-Signature` header value. Requests with an `X-Timestamp` header older than 300 seconds are rejected with `400 ReplayDetected`. Idempotency keys are stored in Redis with a 24-hour TTL; duplicate keys return the cached `workflow_id` without triggering a new Temporal workflow, ensuring exactly-once agent invocation per external event.
+
+### 10.9 Secret Lifecycle Management (NFR10)
+- **Solution**: AWS Secrets Manager rotation lambdas configured per secret type — LLM API keys rotate every 90 days, OIDC signing keys every 30 days, database credentials every 90 days. The External Secrets Operator (ESO) syncs rotated secrets into Kubernetes Secrets and triggers zero-downtime rolling restarts of affected pods. A Kubernetes `CronJob` (hourly) scans OTel span attributes and Temporal execution logs for regex patterns matching known secret formats (API key prefixes, JWT structures). On detection, the service automatically revokes the exposed secret via the AWS API and fires a PagerDuty alert within 5 minutes.
+
+### 10.10 Multi-Tenancy Isolation (NFR11)
+- **Solution**: PostgreSQL enforces tenant isolation via separate schemas (`tenant_{id}`) and Row-Level Security policies (`tenant_id = current_setting('app.tenant_id')`). The application layer sets `SET LOCAL app.tenant_id = '...'` on every DB transaction — cross-tenant data access is structurally impossible at the database level. Redis namespaces all keys with `{tenant_id}:` prefixes. Temporal uses per-tenant task queues (`{tenant_id}-agent-queue`, `{tenant_id}-team-queue`) — worker pools are shared for efficiency, but queue isolation prevents cross-tenant workflow scheduling or resource starvation.
+
+### 10.11 SLA & Availability (NFR12)
+- **Solution**: Prometheus recording rules compute 5-minute rolling p99 workflow invocation latency and per-tenant success rates. Alertmanager fires PagerDuty when success rate drops below 99.5% sustained for 10 minutes. All stateful services (RDS, ElastiCache) run Multi-AZ; EKS topology spread constraints prevent single-AZ concentration. Route53 health checks automatically flip traffic to a standby region if the primary ALB is unhealthy for 5+ minutes (RTO ≤ 1h). Continuous PostgreSQL WAL archiving to S3 enables point-in-time recovery to within 15 minutes of any failure (RPO ≤ 15 min).
+
+### 10.12 Session & Memory Lifecycle (NFR13)
+- **Solution**: A Temporal `SessionCleanup` cron workflow runs hourly. It queries Redis for sessions where `last_activity > idle_timeout`, publishes a `SessionExpired` event that triggers context vector eviction from the session cache. A nightly `MemoryArchival` Temporal workflow queries pgvector for embeddings older than the tenant's configured retention period, exports them to S3 in Parquet format, and deletes from the live table. Session memory budgets are enforced inside Agent Workers before each activity: at 80% utilization the worker purges the oldest context entries from the conversation window; at 100% it raises `OutOfMemoryError` and terminates the Temporal workflow with a structured error payload containing the session ID and last successful step.
 
 ## 11. Configuration & Secrets Management
 
@@ -793,11 +682,13 @@ To maintain enterprise security postures and streamline MLOps deployments, confi
 
 ### 11.2 Dynamic Agent & Platform Config (Database / Cache)
 - **Pattern**: Polled Relational State (PostgreSQL + Redis).
-- **Usage**: Unlike static infrastructure, Agent capabilities (System Prompts, Max Token limits, Attached Skills, Fallback Models) and Schedule definitions change rapidly. To avoid requiring software redeployments for behavior changes, the Agent Studio UI mutates these configurations directly in Postgres. The Workflow Initiator and Context Hydrator read and locally cache these definitions dynamically at task initiation.
+- **Usage**: Unlike static infrastructure, Agent capabilities (System Prompts, Max Token limits, Attached Skills, Fallback Models) change rapidly. To avoid requiring software redeployments for behavior changes, the Agent Studio UI mutates these configurations directly in Postgres. The API Gateway and Context Hydrator read and locally cache these definitions dynamically at task initiation to instantiate the correct ReAct loop parameters on the fly.
 
 ### 11.3 Enterprise Secrets & Vault Management (AWS Native)
 - **Pattern**: **AWS Secrets Manager** deeply integrated with Kubernetes via the **External Secrets Operator (ESO)**.
-- **Usage**: LLM API keys, OIDC STS signing secrets, and sensitive system credentials are never stored in Git repositories or injected as raw environment variables. ESO syncs secrets into Kubernetes Secrets; secret updates trigger zero-downtime rolling restarts of affected pods automatically.
+- **Usage**: LLM API keys, OIDC STS signing secrets, and sensitive system credentials are never stored in Git repositories or injected as raw environment variables. ESO syncs secrets into Kubernetes Secrets on a polling interval; secret updates trigger zero-downtime rolling restarts of affected pods automatically.
+- **Rotation SLA**: LLM API keys rotate every 90 days; OIDC signing keys rotate every 30 days; database credentials rotate every 90 days. All rotations are automated via per-secret AWS Secrets Manager rotation lambdas.
+- **Leak Detection**: A Kubernetes `CronJob` scans OTel spans and Temporal execution logs hourly for regex patterns matching known secret formats. Detected leaks trigger automatic secret revocation via the AWS API and a PagerDuty alert within 5 minutes.
 - **Just-In-Time (JIT) Tool Execution**: When the reasoning agent invokes a mutating skill on a sensitive external system, the Sandbox Manager fetches the required credential from AWS Secrets Manager exclusively for the lifespan of that Docker container execution. The credential never touches the agent's memory or state.
 
 ## 12. Local Development Architecture (DevEx)
@@ -805,25 +696,25 @@ To maintain enterprise security postures and streamline MLOps deployments, confi
 To ensure rapid iteration cycles without incurring unnecessary cloud costs or bottlenecking on strict IAM policies, the architecture is designed to map cleanly onto a developer's local machine (macOS/Linux) via a hybrid configuration.
 
 ### 12.1 Local Backing Services (Docker Compose)
-Heavy infrastructure state and dependencies should **not** be installed natively. A unified `docker-compose.yml` spins up the essential ecosystem backbone locally, preserving the database-per-service boundary via separate named PostgreSQL instances:
-- **`postgres-temporal`**: PostgreSQL container used exclusively by the Temporal standalone cluster.
-- **`postgres-manifest`**: PostgreSQL container used exclusively by `workflow-initiator`. Run `make db-migrate-manifest` after first start.
-- **`postgres-schedule`**: PostgreSQL container used exclusively by `schedule-service`. Run `make db-migrate-schedule` after first start.
-- **`postgres-memory`**: PostgreSQL container with the `pgvector` extension, used exclusively by `context-hydrator`. Run `make db-migrate-memory` after first start.
-- **`redis`**: For `platform-gateway` rate limiting and session buffering.
-- **`temporal-server` & `temporal-ui`**: The standalone orchestration cluster (available at `localhost:7233` / `localhost:8233`). Temporal Schedules work identically in the local standalone cluster.
-- **`schedule-service`**: Go binary container backed by `postgres-schedule`. Set `TEMPORAL_SCHEDULE_NAMESPACE=default` in `.env` for local dev.
-- **`prometheus` & `grafana`**: Providing immediate local access to the OpenTelemetry tracing UI.
+Heavy infrastructure state and dependencies should **not** be installed natively. A unified `docker-compose.yml` spins up the essential ecosystem backbone locally:
+- **`postgres`**: Customized container running `pgvector` and TimescaleDB extensions. Run `make db-migrate` after first start to apply per-tenant schema and RLS policies for the local `dev` tenant.
+- **`redis`**: Session cache, rate limiting, and webhook idempotency key deduplication (all local dev uses a single `dev:` key prefix).
+- **`temporal-server` & `temporal-ui`**: Standalone orchestration cluster (available at `localhost:7233` / `localhost:8233`).
+- **`sub-agent-registry`**: Go binary container backed by the local Postgres instance.
+- **`skill-dispatcher`**: Go binary container. Set `WEBHOOK_HMAC_DISABLED=true` in `.env` to bypass HMAC validation locally.
+- **`cost-attribution`**: Go binary container with a mock Kafka consumer (reads from a local file queue for dev purposes).
+- **`prometheus` & `grafana`**: Local OTel tracing and metrics UI.
 
 ### 12.2 Service Execution & Hot-Reloading
 Rather than stuffing complex Go/Python build pipelines heavily inside Docker—where debugger attachments drop and iteration loops slow to a crawl—developers run the actual microservices natively to leverage their IDEs (VS Code/Cursor):
 - **Agent Studio (Frontend)**: Runs natively via standard React tooling: `npm run dev` (targeting `localhost:3000`).
-- **Go Gateway, Initiator & Schedule Service**: Runs natively using `air` to parse code changes automatically and trigger near-instant hyper-local recompilations.
-- **Python Agent Workers**: Runs securely via isolated virtual environments (`venv` or `poetry`) combined with `watchfiles` to automatically recycle the Temporal worker instances on code changes.
+- **Golang Gateway & Initiator**: Runs natively using `air` to parse code changes automatically and trigger near-instant hyper-local recompilations.
+- **Python Agent Workers**: Runs securely via isolated virtual environments (`venv` or `poetry`) combined with `watchfiles` to automatically recycle the Temporal worker instances the moment custom core Agent prompt changes are detected.
 
 ### 12.3 Offline Testing & Mocking Constraints
 To iterate offline or avoid executing dangerous tools accidentally during testing:
-- **Local LLM Inference**: The LLM Gateway is reconfigured via `.env` to point to a local **Ollama** daemon (e.g., Llama-3 or Mistral) instead of public provider APIs. Deterministic workflow steps are unaffected since they never invoke the LLM Gateway.
+- **Local LLM Inference**: The LLM Gateway is reconfigured via `.env` to point to a local **Ollama** daemon (e.g., Llama-3 or Mistral on an M-series GPU) instead of public provider APIs.
 - **Webhook Security Bypass**: Set `WEBHOOK_HMAC_DISABLED=true` in `.env` to skip HMAC signature validation locally. Never set this in staging or production.
-- **Schedule Testing**: Use `POST /api/v1/schedules/{id}/trigger` to fire a schedule immediately in local dev without waiting for the cron interval. The Temporal local dev cluster supports this natively.
-- **Execution Sandbox Compatibility**: Because the platform universally standardizes on Docker Containers for tool execution, the sandboxing layer ports natively onto Mac hardware via standard Docker-out-of-Docker socket mounting exactly as in production.
+- **Multi-Tenancy Local Mode**: Local dev runs against a single `dev` tenant schema. Cross-tenant isolation tests require running `make tenant-seed` to create additional tenant schemas in the local Postgres container.
+- **Team Simulation**: `POST /api/v1/teams/{id}/trigger` works against the local docker-compose Temporal instance. Sub-agents run as separate goroutines within the same worker process — no separate pods required locally.
+- **Execution Sandbox Compatibility**: Docker-out-of-Docker socket mounting enables ephemeral sandbox containers to spawn locally on Mac hardware exactly as in production, preventing environment mismatches.
