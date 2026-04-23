@@ -267,7 +267,7 @@ export default function AgentDetailPage({
         </div>
 
         <div className="flex items-center gap-2">
-          {agent.status === "draft" && <EditAgentSheet agent={agent} onUpdated={() => qc.invalidateQueries({ queryKey: ["agents", id] })} />}
+          {agent.status !== "archived" && <EditAgentSheet agent={agent} onUpdated={() => qc.invalidateQueries({ queryKey: ["agents", id] })} />}
           {agent.status === "active" && (
             <>
               <Link href={`/agents/${id}/chat`}>

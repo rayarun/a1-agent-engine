@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Plus, CheckCircle2, Clock, XCircle, Loader2 } from "lucide-react";
+import { Plus, CheckCircle2, Clock, XCircle, Loader2, Edit2 } from "lucide-react";
 import { toolsApi } from "@/lib/api";
 import { ToolSpec } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -140,6 +140,103 @@ function RegisterToolSheet({ onCreated }: { onCreated: () => void }) {
   );
 }
 
+function EditToolSheet({ tool, onUpdated }: { tool: ToolSpec; onUpdated: () => void }) {
+  const [open, setOpen] = useState(false);
+  const { register, handleSubmit, formState: { errors } } = useForm<ToolForm>({
+    resolver: zodResolver(toolSchema),
+    values: {
+      id: tool.id,
+      name: tool.name,
+      version: tool.version,
+      description: tool.description,
+      auth_level: tool.auth_level,
+      sandbox_required: tool.sandbox_required,
+      registered_by: tool.registered_by,
+    },
+  });
+
+  const mutation = useMutation({
+    mutationFn: (data: ToolForm) => toolsApi.update(tool.id, { ...data, status: tool.status }),
+    onSuccess: () => { setOpen(false); onUpdated(); },
+  });
+
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger render={<Button size="sm" variant="ghost" className="h-7 w-7 p-0" />}>
+        <Edit2 className="h-4 w-4" />
+      </SheetTrigger>
+      <SheetContent className="w-[480px] overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle>Edit Tool</SheetTitle>
+        </SheetHeader>
+        <form
+          onSubmit={handleSubmit((d) => mutation.mutate(d))}
+          className="mt-6 flex flex-col gap-4"
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="id">Tool ID</Label>
+              <Input id="id" placeholder="tool-uuid" {...register("id")} disabled />
+              {errors.id && <p className="text-xs text-destructive">{errors.id.message}</p>}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="version">Version</Label>
+              <Input id="version" placeholder="1.0.0" {...register("version")} />
+              {errors.version && <p className="text-xs text-destructive">{errors.version.message}</p>}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="name">Name</Label>
+            <Input id="name" placeholder="query-database" {...register("name")} />
+            {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="description">Description</Label>
+            <Textarea id="description" rows={3} placeholder="What this tool does..." {...register("description")} />
+            {errors.description && <p className="text-xs text-destructive">{errors.description.message}</p>}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>Auth Level</Label>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="radio" value="read" {...register("auth_level")} />
+                Read
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="radio" value="mutating" {...register("auth_level")} />
+                Mutating
+              </label>
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" {...register("sandbox_required")} />
+            Requires Sandbox
+          </label>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="registered_by">Registered By</Label>
+            <Input id="registered_by" placeholder="platform-admin" {...register("registered_by")} />
+            {errors.registered_by && <p className="text-xs text-destructive">{errors.registered_by.message}</p>}
+          </div>
+
+          {mutation.error && (
+            <p className="text-xs text-destructive">{String(mutation.error)}</p>
+          )}
+
+          <Button type="submit" disabled={mutation.isPending} className="mt-2">
+            {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Save Changes
+          </Button>
+        </form>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 export default function ToolsPage() {
   const qc = useQueryClient();
   const { data: tools, isLoading, isError } = useQuery({
@@ -205,6 +302,9 @@ export default function ToolsPage() {
               </div>
               <div className="flex items-center gap-3 ml-4 shrink-0">
                 <StatusBadge status={tool.status} />
+                {tool.status !== "deprecated" && (
+                  <EditToolSheet tool={tool} onUpdated={() => qc.invalidateQueries({ queryKey: ["tools"] })} />
+                )}
                 {tool.status === "pending_review" && (
                   <Button
                     size="sm"
