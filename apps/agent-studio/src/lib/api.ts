@@ -8,6 +8,8 @@ const AGENT_REGISTRY =
   process.env.NEXT_PUBLIC_AGENT_REGISTRY_URL ?? "http://localhost:8088";
 const API_GATEWAY =
   process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "http://localhost:8080";
+const LLM_GATEWAY =
+  process.env.NEXT_PUBLIC_LLM_GATEWAY_URL ?? "http://localhost:8083";
 
 async function req<T>(base: string, path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${base}${path}`, {
@@ -104,6 +106,15 @@ export const agentsApi = {
       AGENT_REGISTRY,
       `/api/v1/agents/${id}/transition`,
       { method: "POST", body: JSON.stringify(body) }
+    ),
+};
+
+// Models
+export const modelsApi = {
+  list: () =>
+    req<{ models: Array<{ id: string; name: string }> }>(
+      LLM_GATEWAY,
+      "/v1/models"
     ),
 };
 

@@ -8,7 +8,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
 import { Bot, MessageSquare, ArrowLeft, Loader2, Zap, Edit2, Trash2, Plus } from "lucide-react";
-import { agentsApi, skillsApi } from "@/lib/api";
+import { agentsApi, skillsApi, modelsApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -30,11 +30,11 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 
-const MODELS = [
-  { value: "claude-opus-4-7", label: "Claude Opus 4.7" },
-  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-  { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-  { value: "mock-model", label: "Mock (testing)" },
+const FALLBACK_MODELS = [
+  { id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+  { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5" },
+  { id: "mock-model", name: "Mock (testing)" },
 ];
 
 const agentSchema = z.object({
@@ -73,10 +73,12 @@ function EditAgentSheet({ agent, onUpdated }: { agent: any; onUpdated: () => voi
   });
   const { fields, append, remove } = useFieldArray({ control, name: "skills" });
 
-  const { data: activeSkills } = useQuery({
-    queryKey: ["skills", "active"],
-    queryFn: () => skillsApi.list("active"),
+  const { data: modelsData } = useQuery({
+    queryKey: ["models"],
+    queryFn: () => modelsApi.list(),
   });
+
+  const availableModels = modelsData?.models ?? FALLBACK_MODELS;
 
   const mutation = useMutation({
     mutationFn: (data: AgentForm) => agentsApi.update(agent.id, data),
@@ -124,8 +126,8 @@ function EditAgentSheet({ agent, onUpdated }: { agent: any; onUpdated: () => voi
                       <SelectValue placeholder="Select a model" />
                     </SelectTrigger>
                     <SelectContent>
-                      {MODELS.map((m) => (
-                        <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                      {availableModels.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>

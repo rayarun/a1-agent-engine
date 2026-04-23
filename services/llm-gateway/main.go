@@ -13,6 +13,15 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+type modelInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type modelsResponse struct {
+	Models []modelInfo `json:"models"`
+}
+
 var (
 	openaiClient *openai.Client
 	anthropicKey string
@@ -47,13 +56,27 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("GET /v1/models", handleModels)
 	mux.HandleFunc("POST /v1/chat/completions", handleChatCompletions)
 	mux.HandleFunc("POST /v1/embeddings", handleEmbeddings)
 
 	log.Println("Starting LLM Gateway on :8083")
-	if err := http.ListenAndServe(":8083", mux); err != nil {
+	if err := http.ListenAndServe(":8083", withCORS(mux)); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func handleEmbeddings(w http.ResponseWriter, r *http.Request) {
@@ -354,6 +377,30 @@ func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRe
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(openaiResp)
+}
+
+func handleModels(w http.ResponseWriter, r *http.Request) {
+	var models []modelInfo
+
+	if anthropicKey != "" {
+		models = append(models,
+			modelInfo{"claude-opus-4-7", "Claude Opus 4.7"},
+			modelInfo{"claude-sonnet-4-6", "Claude Sonnet 4.6"},
+			modelInfo{"claude-haiku-4-5-20251001", "Claude Haiku 4.5"},
+		)
+	}
+
+	if openaiClient != nil {
+		models = append(models,
+			modelInfo{"gpt-4o", "GPT-4o"},
+			modelInfo{"gpt-4o-mini", "GPT-4o Mini"},
+		)
+	}
+
+	models = append(models, modelInfo{"mock-model", "Mock (testing)"})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(modelsResponse{Models: models})
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {

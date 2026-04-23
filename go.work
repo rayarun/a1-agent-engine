@@ -6,6 +6,7 @@ use (
 	./packages/webhook-security
 	./services/agent-registry
 	./services/api-gateway
+	./services/llm-gateway
 	./services/sandbox-manager
 	./services/skill-catalog
 	./services/skill-dispatcher
