@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Plus, Trash2, Loader2, Bot, MessageSquare } from "lucide-react";
@@ -14,6 +14,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Sheet,
   SheetContent,
@@ -34,6 +41,13 @@ const agentSchema = z.object({
 });
 
 type AgentForm = z.infer<typeof agentSchema>;
+
+const MODELS = [
+  { value: "claude-opus-4-7", label: "Claude Opus 4.7" },
+  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+  { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
+  { value: "mock-model", label: "Mock (testing)" },
+];
 
 const STATUS_COLORS: Record<string, string> = {
   draft: "bg-muted text-muted-foreground",
@@ -112,7 +126,22 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
           <div className="grid grid-cols-3 gap-4">
             <div className="flex flex-col gap-1.5">
               <Label>Model</Label>
-              <Input placeholder="claude-opus-4-7" {...register("model")} />
+              <Controller
+                name="model"
+                control={control}
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select a model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MODELS.map((m) => (
+                        <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Max Iterations</Label>

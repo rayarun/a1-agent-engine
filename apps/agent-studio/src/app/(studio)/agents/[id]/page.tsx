@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { use } from "react";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
@@ -16,12 +16,26 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Sheet,
   SheetContent,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+
+const MODELS = [
+  { value: "claude-opus-4-7", label: "Claude Opus 4.7" },
+  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+  { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
+  { value: "mock-model", label: "Mock (testing)" },
+];
 
 const agentSchema = z.object({
   name: z.string().min(1),
@@ -101,7 +115,22 @@ function EditAgentSheet({ agent, onUpdated }: { agent: any; onUpdated: () => voi
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
               <Label>Model</Label>
-              <Input placeholder="claude-opus-4-7" {...register("model")} />
+              <Controller
+                name="model"
+                control={control}
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select a model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MODELS.map((m) => (
+                        <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
               {errors.model && <p className="text-xs text-destructive">{errors.model.message}</p>}
             </div>
             <div className="flex flex-col gap-1.5">
