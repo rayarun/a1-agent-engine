@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -20,6 +21,12 @@ type modelInfo struct {
 
 type modelsResponse struct {
 	Models []modelInfo `json:"models"`
+}
+
+type remoteModelsResponse struct {
+	Data []struct {
+		ID string `json:"id"`
+	} `json:"data"`
 }
 
 var (
@@ -50,6 +57,43 @@ func init() {
 	if openaiClient == nil && anthropicKey == "" {
 		log.Println("LLM Gateway: Running in Mock only mode (no API keys)")
 	}
+}
+
+func fetchRemoteModels() ([]string, error) {
+	if anthropicKey == "" || anthropicURL == "" {
+		return nil, fmt.Errorf("anthropic not configured")
+	}
+
+	modelsURL := strings.TrimSuffix(anthropicURL, "/messages") + "/models"
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	req, _ := http.NewRequest("GET", modelsURL, nil)
+	req.Header.Set("x-api-key", anthropicKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var remoteResp remoteModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&remoteResp); err != nil {
+		return nil, fmt.Errorf("decode failed: %v", err)
+	}
+
+	var models []string
+	for _, m := range remoteResp.Data {
+		if m.ID != "" {
+			models = append(models, m.ID)
+		}
+	}
+	return models, nil
 }
 
 func main() {
@@ -382,19 +426,27 @@ func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRe
 func handleModels(w http.ResponseWriter, r *http.Request) {
 	var models []modelInfo
 
-	if anthropicKey != "" {
-		models = append(models,
-			modelInfo{"claude-opus-4-7", "Claude Opus 4.7"},
-			modelInfo{"claude-sonnet-4-6", "Claude Sonnet 4.6"},
-			modelInfo{"claude-haiku-4-5-20251001", "Claude Haiku 4.5"},
-		)
-	}
+	if remoteModels, err := fetchRemoteModels(); err == nil {
+		for _, id := range remoteModels {
+			models = append(models, modelInfo{ID: id, Name: id})
+		}
+		log.Printf("LLM Gateway: Fetched %d models from remote endpoint", len(remoteModels))
+	} else {
+		log.Printf("LLM Gateway: Failed to fetch remote models (%v), using fallback", err)
+		if anthropicKey != "" {
+			models = append(models,
+				modelInfo{"claude-opus-4-7", "Claude Opus 4.7"},
+				modelInfo{"claude-sonnet-4-6", "Claude Sonnet 4.6"},
+				modelInfo{"claude-haiku-4-5-20251001", "Claude Haiku 4.5"},
+			)
+		}
 
-	if openaiClient != nil {
-		models = append(models,
-			modelInfo{"gpt-4o", "GPT-4o"},
-			modelInfo{"gpt-4o-mini", "GPT-4o Mini"},
-		)
+		if openaiClient != nil {
+			models = append(models,
+				modelInfo{"gpt-4o", "GPT-4o"},
+				modelInfo{"gpt-4o-mini", "GPT-4o Mini"},
+			)
+		}
 	}
 
 	models = append(models, modelInfo{"mock-model", "Mock (testing)"})
