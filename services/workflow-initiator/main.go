@@ -18,6 +18,7 @@ func main() {
 	mux.HandleFunc("GET /health", service.HandleHealth)
 	mux.HandleFunc("POST /api/v1/sessions", service.HandleStartSession)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", service.HandleGetSessionStatus)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/events", service.HandleGetSessionEvents)
 
 	log.Println("Starting Workflow Initiator on :8081")
 	if err := http.ListenAndServe(":8081", mux); err != nil {

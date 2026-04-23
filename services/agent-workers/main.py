@@ -12,7 +12,7 @@ try:
     from workflows import AgentWorkflow
     
     # Activities are non-deterministic (all moved to separate files)
-    from activities_agent import execute_code, reasoning_step
+    from activities_agent import execute_code, reasoning_step, invoke_skill
     from activities_memory import recall_memories, store_memory
 except Exception as e:
     print(f"CRITICAL STARTUP ERROR: Failed to import modules: {e}")
@@ -48,7 +48,7 @@ async def main():
             client,
             task_queue=task_queue,
             workflows=[AgentWorkflow],
-            activities=[execute_code, reasoning_step, recall_memories, store_memory], 
+            activities=[execute_code, reasoning_step, invoke_skill, recall_memories, store_memory],
         )
         
         logger.info(f"Starting Temporal Agent Worker on queue '{task_queue}'...")

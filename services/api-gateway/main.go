@@ -6,7 +6,22 @@ import (
 	"os"
 
 	"github.com/agent-platform/api-gateway/pkg/service"
+	hmacpkg "github.com/agent-platform/webhook-security/pkg/hmac"
+	"github.com/agent-platform/webhook-security/pkg/middleware"
 )
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Tenant-ID")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func main() {
 	initiatorURL := os.Getenv("WORKFLOW_INITIATOR_URL")
@@ -14,18 +29,30 @@ func main() {
 		initiatorURL = "http://localhost:8081"
 	}
 
+	hmacSecret := []byte(os.Getenv("WEBHOOK_HMAC_SECRET"))
+	if len(hmacSecret) == 0 {
+		hmacSecret = []byte("dev-secret")
+	}
+
+	hmacMW := middleware.ValidateHMAC(
+		hmacpkg.New(300),
+		func(_ *http.Request) ([]byte, error) { return hmacSecret, nil },
+	)
+
+	store := service.NewInMemoryIdempotencyStore()
 	h := &service.GatewayHandler{
-		InitiatorURL: initiatorURL,
+		InitiatorURL:     initiatorURL,
+		IdempotencyStore: store,
 	}
 
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("GET /health", h.HandleHealth)
-	mux.HandleFunc("POST /api/v1/agents/{agent_id}/trigger", h.HandleTriggerAgent)
+	mux.Handle("POST /api/v1/agents/{agent_id}/trigger", hmacMW(http.HandlerFunc(h.HandleTriggerAgent)))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/status", h.HandleGetSessionStatus)
+	mux.HandleFunc("GET /api/v1/agents/{id}/chat", h.HandleChatStream)
 
 	log.Printf("Starting API Gateway on :8080 (Initiator: %s)", initiatorURL)
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := http.ListenAndServe(":8080", withCORS(mux)); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }

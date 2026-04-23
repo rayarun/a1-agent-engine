@@ -2,7 +2,14 @@ go 1.25.4
 
 use (
 	./packages/go-shared
+	./packages/hook-engine
+	./packages/webhook-security
+	./services/agent-registry
 	./services/api-gateway
 	./services/sandbox-manager
+	./services/skill-catalog
+	./services/skill-dispatcher
+	./services/sub-agent-registry
+	./services/tool-registry
 	./services/workflow-initiator
 )

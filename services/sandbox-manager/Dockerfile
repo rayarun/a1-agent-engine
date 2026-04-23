@@ -1,24 +1,25 @@
 # --- Build Stage ---
 FROM golang:alpine AS builder
 
+# Bypass TLS for apk then install certs
+RUN sed -i "s/https/http/g" /etc/apk/repositories
+COPY zscaler.pem /usr/local/share/ca-certificates/zscaler.crt
+RUN apk add --no-cache ca-certificates git && update-ca-certificates
+
 WORKDIR /app
 
 # Copy shared packages
-COPY packages/go-shared ./packages/go-shared
+COPY packages ./packages
 
 # Copy service code
 COPY services/sandbox-manager ./services/sandbox-manager
 
 WORKDIR /app/services/sandbox-manager
-RUN go mod download
+RUN GOPROXY=direct go mod download
 RUN go build -o /sandbox-manager main.go
 
 # --- Final Stage ---
 FROM alpine:latest
-
-# We don't need docker installed here if we only use the SDK via socket,
-# but having the CLI can be helpful for debugging.
-RUN apk add --no-cache docker-cli
 
 WORKDIR /
 COPY --from=builder /sandbox-manager /sandbox-manager

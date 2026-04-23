@@ -7,15 +7,40 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/agent-platform/go-shared/pkg/models"
+	enumspb "go.temporal.io/api/enums/v1"
+	workflowservice "go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 )
 
-// TemporalClient defines the subset of temporal client methods we use.
+// EncodedQueryValue wraps a Temporal query result so it can be decoded into a Go value.
+type EncodedQueryValue interface {
+	Get(valuePtr interface{}) error
+}
+
+// TemporalClient defines the subset of Temporal client methods used by this service.
 type TemporalClient interface {
 	ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow interface{}, args ...interface{}) (client.WorkflowRun, error)
-	GetWorkflow(ctx context.Context, workflowID string, runID string) client.WorkflowRun
+	DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*workflowservice.DescribeWorkflowExecutionResponse, error)
+	QueryWorkflow(ctx context.Context, workflowID, runID, queryType string, args ...interface{}) (EncodedQueryValue, error)
+}
+
+// realTemporalClient wraps the Temporal SDK client to satisfy TemporalClient.
+type realTemporalClient struct{ c client.Client }
+
+func (r *realTemporalClient) ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow interface{}, args ...interface{}) (client.WorkflowRun, error) {
+	return r.c.ExecuteWorkflow(ctx, options, workflow, args...)
+}
+
+func (r *realTemporalClient) DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
+	return r.c.DescribeWorkflowExecution(ctx, workflowID, runID)
+}
+
+func (r *realTemporalClient) QueryWorkflow(ctx context.Context, workflowID, runID, queryType string, args ...interface{}) (EncodedQueryValue, error) {
+	return r.c.QueryWorkflow(ctx, workflowID, runID, queryType, args...)
 }
 
 var temporalClient TemporalClient
@@ -26,50 +51,52 @@ func InitTemporalClient() error {
 	if hostPort == "" {
 		hostPort = "localhost:7233"
 	}
-
-	c, err := client.Dial(client.Options{
-		HostPort: hostPort,
-	})
+	c, err := client.Dial(client.Options{HostPort: hostPort})
 	if err != nil {
 		return fmt.Errorf("unable to create temporal client: %w", err)
 	}
-	temporalClient = c
+	temporalClient = &realTemporalClient{c}
 	log.Printf("Connected to Temporal at %s", hostPort)
 	return nil
 }
 
-// SetTemporalClient allows mocking the client in tests.
-func SetTemporalClient(c TemporalClient) {
-	temporalClient = c
-}
+// SetTemporalClient allows injecting a mock client in tests.
+func SetTemporalClient(c TemporalClient) { temporalClient = c }
 
-// HandleStartSession handles the creation of a new agent session.
+// HandleStartSession dispatches a new AgentWorkflow to Temporal.
+// If the request does not include a manifest, it fetches it from the agent-registry.
 func HandleStartSession(w http.ResponseWriter, r *http.Request) {
 	var req models.StartSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	if req.AgentID == "" {
 		http.Error(w, "agent_id is required", http.StatusBadRequest)
 		return
 	}
-
-	// 1. Prepare Workflow Options
-	workflowOptions := client.StartWorkflowOptions{
-		ID:        fmt.Sprintf("agent-wf-%s-%s", req.AgentID, req.SessionID),
-		TaskQueue: "agent-task-queue",
-	}
-
-	// 2. Dispatch Workflow via Temporal
 	if temporalClient == nil {
-		log.Println("Temporal client is not initialized")
 		http.Error(w, "Temporal client not connected", http.StatusServiceUnavailable)
 		return
 	}
 
-	// We use a string "AgentWorkflow" to match the Python worker's registration
+	// Fetch manifest from agent-registry when not supplied by caller.
+	if req.Manifest == nil {
+		if manifest := fetchManifest(r.Context(), req.AgentID, req.TenantID); manifest != nil {
+			req.Manifest = manifest
+		}
+	}
+
+	taskQueue := "agent-task-queue"
+	if req.TenantID != "" {
+		taskQueue = fmt.Sprintf("%s-agent-queue", req.TenantID)
+	}
+
+	workflowOptions := client.StartWorkflowOptions{
+		ID:        fmt.Sprintf("agent-wf-%s-%s", req.AgentID, req.SessionID),
+		TaskQueue: taskQueue,
+	}
+
 	we, err := temporalClient.ExecuteWorkflow(context.Background(), workflowOptions, "AgentWorkflow", req)
 	if err != nil {
 		log.Printf("Failed to dispatch workflow: %v", err)
@@ -84,50 +111,125 @@ func HandleStartSession(w http.ResponseWriter, r *http.Request) {
 		RunID:      we.GetRunID(),
 		Status:     "RUNNING",
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(resp)
 }
 
-// HandleGetSessionStatus fetches the status/result of a workflow from Temporal.
+// HandleGetSessionStatus returns the current execution status of a workflow.
 func HandleGetSessionStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		http.Error(w, "workflow id is required", http.StatusBadRequest)
 		return
 	}
-
 	if temporalClient == nil {
 		http.Error(w, "Temporal client not connected", http.StatusServiceUnavailable)
 		return
 	}
 
-	// Fetch the workflow handle
-	we := temporalClient.GetWorkflow(context.Background(), id, "")
-	
-	var result string
-	err := we.Get(context.Background(), &result)
-	
-	status := "COMPLETED"
+	desc, err := temporalClient.DescribeWorkflowExecution(context.Background(), id, "")
 	if err != nil {
-		// If the workflow is still running, Get() might block or return specific errors.
-		// For simplicity in this demo, we assume failure to Get() means it's still active or failed.
-		status = "RUNNING"
-		result = ""
+		http.Error(w, fmt.Sprintf("Failed to describe workflow: %v", err), http.StatusInternalServerError)
+		return
 	}
 
 	resp := models.SessionStatus{
 		WorkflowID: id,
-		Status:     status,
-		Result:     result,
+		Status:     mapTemporalStatus(desc.WorkflowExecutionInfo.Status),
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-// HandleHealth returns the health status of the service.
+// HandleGetSessionEvents queries the workflow for its accumulated events list and
+// returns events starting at the index given by the ?from= query parameter.
+func HandleGetSessionEvents(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "workflow id is required", http.StatusBadRequest)
+		return
+	}
+	if temporalClient == nil {
+		http.Error(w, "Temporal client not connected", http.StatusServiceUnavailable)
+		return
+	}
+
+	from := 0
+	if s := r.URL.Query().Get("from"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			from = n
+		}
+	}
+
+	val, err := temporalClient.QueryWorkflow(r.Context(), id, "", "get_events")
+	if err != nil {
+		// Workflow not yet running or query not registered — return empty.
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]models.AgentEvent{})
+		return
+	}
+
+	var all []models.AgentEvent
+	if err := val.Get(&all); err != nil || from >= len(all) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]models.AgentEvent{})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(all[from:])
+}
+
+// HandleHealth returns service health.
 func HandleHealth(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Workflow Initiator is healthy\n")
+}
+
+// fetchManifest calls the agent-registry to retrieve the AgentManifest for agentID.
+func fetchManifest(ctx context.Context, agentID, tenantID string) *models.AgentManifest {
+	registryURL := os.Getenv("AGENT_REGISTRY_URL")
+	if registryURL == "" {
+		registryURL = "http://localhost:8088"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/api/v1/agents/%s", registryURL, agentID), nil)
+	if err != nil {
+		return nil
+	}
+	if tenantID != "" {
+		req.Header.Set("X-Tenant-ID", tenantID)
+	}
+
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var manifest models.AgentManifest
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+		return nil
+	}
+	return &manifest
+}
+
+func mapTemporalStatus(s enumspb.WorkflowExecutionStatus) string {
+	switch s {
+	case enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING:
+		return "RUNNING"
+	case enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED:
+		return "COMPLETED"
+	case enumspb.WORKFLOW_EXECUTION_STATUS_FAILED:
+		return "FAILED"
+	case enumspb.WORKFLOW_EXECUTION_STATUS_CANCELED:
+		return "CANCELED"
+	case enumspb.WORKFLOW_EXECUTION_STATUS_TIMED_OUT:
+		return "TIMED_OUT"
+	case enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED:
+		return "TERMINATED"
+	default:
+		return "UNKNOWN"
+	}
 }

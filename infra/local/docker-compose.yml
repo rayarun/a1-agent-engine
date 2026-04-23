@@ -14,8 +14,6 @@ services:
     networks:
       - agent-net
 
-  # UI is now embedded in the temporal container on port 8233
-
   # ------------------------------------
   # Datastores: Postgres & Redis
   # ------------------------------------
@@ -23,7 +21,7 @@ services:
     image: pgvector/pgvector:pg16
     container_name: postgres
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -47,8 +45,112 @@ services:
     networks:
       - agent-net
 
+  # Run all migrations once, then exit.
+  migrate:
+    image: pgvector/pgvector:pg16
+    container_name: migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../postgres/migrations:/migrations
+      - ../postgres/migrate.sh:/migrate.sh
+    environment:
+      - POSTGRES_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
+    entrypoint: ["bash", "/migrate.sh"]
+    networks:
+      - agent-net
+
   # ------------------------------------
-  # Application Services
+  # Tier-1: Tool Registry  (port 8086)
+  # ------------------------------------
+  tool-registry:
+    build:
+      context: ../../
+      dockerfile: services/tool-registry/Dockerfile
+    container_name: tool-registry
+    ports:
+      - "8086:8086"
+    environment:
+      # Remove DATABASE_URL to fall back to in-memory store.
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - agent-net
+
+  # ------------------------------------
+  # Tier-2: Skill Catalog  (port 8087)
+  # ------------------------------------
+  skill-catalog:
+    build:
+      context: ../../
+      dockerfile: services/skill-catalog/Dockerfile
+    container_name: skill-catalog
+    ports:
+      - "8087:8087"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - agent-net
+
+  # ------------------------------------
+  # Tier-2: Skill Dispatcher  (port 8085)
+  # ------------------------------------
+  skill-dispatcher:
+    build:
+      context: ../../
+      dockerfile: services/skill-dispatcher/Dockerfile
+    container_name: skill-dispatcher
+    ports:
+      - "8085:8085"
+    environment:
+      - WORKFLOW_INITIATOR_URL=http://workflow-initiator:8081
+    networks:
+      - agent-net
+
+  # ------------------------------------
+  # Tier-3: Sub-Agent Registry  (port 8084)
+  # ------------------------------------
+  sub-agent-registry:
+    build:
+      context: ../../
+      dockerfile: services/sub-agent-registry/Dockerfile
+    container_name: sub-agent-registry
+    ports:
+      - "8084:8084"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - agent-net
+
+  # ------------------------------------
+  # Tier-4: Agent Registry  (port 8088)
+  # ------------------------------------
+  agent-registry:
+    build:
+      context: ../../
+      dockerfile: services/agent-registry/Dockerfile
+    container_name: agent-registry
+    ports:
+      - "8088:8088"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - agent-net
+
+  # ------------------------------------
+  # API Gateway  (port 8080)
   # ------------------------------------
   api-gateway:
     build:
@@ -64,6 +166,9 @@ services:
     networks:
       - agent-net
 
+  # ------------------------------------
+  # Workflow Initiator  (port 8081)
+  # ------------------------------------
   workflow-initiator:
     build:
       context: ../../
@@ -73,11 +178,16 @@ services:
       - "8081:8081"
     environment:
       - TEMPORAL_HOSTPORT=temporal:7233
+      - AGENT_REGISTRY_URL=http://agent-registry:8088
     depends_on:
       - temporal
+      - agent-registry
     networks:
       - agent-net
 
+  # ------------------------------------
+  # Sandbox Manager  (port 8082)
+  # ------------------------------------
   sandbox-manager:
     build:
       context: ../../
@@ -90,6 +200,9 @@ services:
     networks:
       - agent-net
 
+  # ------------------------------------
+  # LLM Gateway  (port 8083)
+  # ------------------------------------
   llm-gateway:
     build:
       context: ../../
@@ -99,9 +212,14 @@ services:
       - "8083:8083"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
     networks:
       - agent-net
 
+  # ------------------------------------
+  # Agent Workers (Temporal Python)
+  # ------------------------------------
   agent-workers:
     build:
       context: ../../
@@ -111,8 +229,10 @@ services:
     environment:
       - TEMPORAL_HOSTPORT=temporal:7233
       - LLM_GATEWAY_URL=http://llm-gateway:8083/v1
+      - TEMPORAL_TASK_QUEUE=default-tenant-agent-queue
       - SANDBOX_MANAGER_URL=http://sandbox-manager:8082/api/v1/execute
-      - POSTGRES_URL=postgresql://postgres:postgres@postgres:5432/agentplatform
+      - SKILL_DISPATCHER_URL=http://skill-dispatcher:8085
+      - POSTGRES_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
     depends_on:
       - temporal
       - sandbox-manager
@@ -120,6 +240,37 @@ services:
     networks:
       - agent-net
 
+  # ------------------------------------
+  # Agent Studio  (port 3000)
+  # ------------------------------------
+  agent-studio:
+    build:
+      context: ../../
+      dockerfile: apps/agent-studio/Dockerfile
+      args:
+        # NEXT_PUBLIC_* vars are baked into the JS bundle at build time.
+        # For local test: browser reaches backends via published ports on the host.
+        NEXT_PUBLIC_API_GATEWAY_URL: http://localhost:8080
+        NEXT_PUBLIC_TOOL_REGISTRY_URL: http://localhost:8086
+        NEXT_PUBLIC_SKILL_CATALOG_URL: http://localhost:8087
+        NEXT_PUBLIC_AGENT_REGISTRY_URL: http://localhost:8088
+        NEXT_PUBLIC_TENANT_ID: default-tenant
+    container_name: agent-studio
+    ports:
+      - "3000:3000"
+    environment:
+      - API_GATEWAY_URL=http://api-gateway:8080
+    depends_on:
+      - api-gateway
+      - tool-registry
+      - skill-catalog
+      - agent-registry
+    networks:
+      - agent-net
+
+  # ------------------------------------
+  # SRE Dashboard  (port 8501)
+  # ------------------------------------
   dashboard:
     build:
       context: ../../
@@ -129,7 +280,7 @@ services:
       - "8501:8501"
     environment:
       - API_GATEWAY_URL=http://api-gateway:8080
-      - POSTGRES_URL=postgresql://postgres:postgres@postgres:5432/agentplatform
+      - POSTGRES_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
     depends_on:
       - api-gateway
       - postgres

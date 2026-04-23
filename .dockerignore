@@ -1,0 +1,28 @@
+# Git
+.git
+.gitignore
+
+# Node
+node_modules
+apps/agent-studio/.next
+apps/agent-studio/node_modules
+
+# Python virtualenvs
+**/.venv
+**/__pycache__
+**/*.pyc
+
+# Go build artifacts
+**/vendor
+
+# Temporal dev data
+infra/local/temporal_data
+
+# IDE / OS
+.DS_Store
+.idea
+.vscode
+*.swp
+
+# Claude worktrees (large, not needed in images)
+.claude/worktrees

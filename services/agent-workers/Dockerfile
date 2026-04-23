@@ -1,5 +1,13 @@
 FROM python:3.10-slim
 
+COPY zscaler.pem /usr/local/share/ca-certificates/zscaler.crt
+RUN apt-get update && apt-get install -y ca-certificates && update-ca-certificates
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
+COPY zscaler.pem /usr/local/share/ca-certificates/zscaler.crt
+RUN apt-get update && apt-get install -y ca-certificates && update-ca-certificates
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
 WORKDIR /app
 
 # Install system dependencies
