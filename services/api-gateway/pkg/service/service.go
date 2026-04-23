@@ -280,7 +280,7 @@ func (h *GatewayHandler) HandleChatStream(w http.ResponseWriter, r *http.Request
 			stResp.Body.Close()
 		}
 
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
