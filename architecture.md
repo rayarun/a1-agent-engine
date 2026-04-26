@@ -19,7 +19,7 @@ Architecturally, the system is designed from the ground up to fulfill several st
 ---
 
 ## 1. Logical Architecture
-The logical architecture decouples the definition of an agent from its execution across six planes. It separates primitive capability registration (Tools) from governed composition (Skills), and single-agent reasoning from coordinated multi-agent execution (Agent Teams). A dedicated Security Plane enforces zero-trust policy across all planes as a cross-cutting concern.
+The logical architecture decouples the definition of an agent from its execution across seven planes. It separates primitive capability registration (Tools) from governed composition (Skills), single-agent reasoning from coordinated multi-agent execution (Agent Teams), and agent creation from platform administration. A dedicated Security Plane enforces zero-trust policy across all planes as a cross-cutting concern.
 
 ```mermaid
 graph TD
@@ -33,6 +33,15 @@ graph TD
         UI --> Simulator[Agent Testing Simulator]
         UI --> LifecycleMgr[Lifecycle and Deployment Manager]
         UI --> ManifestAssistant[Manifest Assistant Chat UI]
+    end
+
+    subgraph Admin_Plane
+        AdminUI[Admin Console UI] --> AdminAPI[Admin API Gateway]
+        AdminAPI --> TenantMgr[Tenant Manager]
+        AdminAPI --> LLMConfig[LLM Config Manager]
+        AdminAPI --> SystemAgentMgr[System Agent Manager]
+        AdminAPI --> CostTracker[Cost Tracking & Billing]
+        AdminAPI --> AuditLog[Audit Log Query]
     end
 
     subgraph Orchestration_Plane
@@ -58,6 +67,7 @@ graph TD
         LongMem[Vector DB - tenant-partitioned]
         LifecycleStore[Lifecycle State Store]
         CostStore[Cost Attribution Store]
+        TenantStore[Tenant Settings Store]
         OTel[Observability and Audit - OTel]
     end
 
@@ -75,6 +85,10 @@ graph TD
 
     AgentRegistry -.-> Gateway
     ManifestAssistant -.-> Gateway
+    AdminAPI -.-> TenantStore
+    AdminAPI -.-> CostStore
+    AdminAPI -.-> OTel
+    SystemAgentMgr -.-> AgentRegistry
     AgentWorker --> SkillDispatcher
     SystemAgentWorker --> SkillDispatcher
     SkillDispatcher --> Router
@@ -94,12 +108,14 @@ graph TD
     LLMRouter --> LocalLLM
     Security_Plane -.->|cross-cutting| Orchestration_Plane
     Security_Plane -.->|cross-cutting| Execution_Plane
+    Security_Plane -.->|cross-cutting| Admin_Plane
 ```
 
 - **Control Plane**: The command center for all four tiers. Platform engineers register Tools via the Tool Registry (security review required). Skill Developers compose Tools into Skills in the Skill Catalog. Sub-Agent Developers define capability contracts in the Sub-Agent Registry. No-Code creators wire Sub-Agents into Team Manifests and Agent Manifests. The Lifecycle Manager governs state transitions and deployment strategies across all tiers. The **Manifest Assistant Chat UI** is embedded in the Agent Creation dialog, allowing users to interactively design agent manifests with AI assistance.
+- **Admin Plane (Platform Governance)**: A dedicated governance layer for platform operators. The **Admin Console UI** (Next.js frontend on port 3001) provides graphical administration. The **Admin API Gateway** (Go service on port 8089) enforces bearer-token authentication and aggregates cross-tenant data without tenant filtering. Responsibilities: tenant CRUD (creation, quotas, status), LLM provider configuration (proxy URL, API keys, per-tenant model allowlists), system agent management (lifecycle transitions for Manifest Assistant and other platform agents), cost attribution and billing (per-tenant/agent/skill aggregation from `cost_events`), audit log queries (immutable records of all lifecycle events across resources), and cross-tenant execution visibility (no tenant isolation for admin queries). The Admin Plane integrates with Tenant Store, Cost Store, and OTel Data Plane for governance data.
 - **Orchestration Plane (The Brain)**: The Agent API Gateway validates inbound requests (HMAC on webhooks) and routes to the Temporal Workflow Engine. For single agents, the engine dispatches to an Agent Worker. For teams, it dispatches to the Team Orchestrator, which fans out to the Sub-Agent Dispatcher, launching parallel Agent Workers per sub-agent. HITL signals propagate team-wide, suspending all parallel branches. A **System Agent Worker** pool runs on the isolated `platform-system-agent-queue` for platform system agents (e.g., Manifest Assistant), keeping platform automation separate from user workflows.
 - **Execution Plane (The Hands)**: The Skill Dispatcher receives slash-command-style invocations, validates arguments, fires pre/post hooks, and routes tool chains through the Tool Router. The Tool Router dispatches to Ephemeral Sandboxes (arbitrary code) or Internal Go Microservices (typed platform APIs).
-- **Data Plane**: Redis for short-term session context; pgvector (tenant-partitioned) for long-term semantic memory; a Lifecycle State Store for immutable audit trails of all four-tier transitions; a Cost Attribution Store (TimescaleDB) for per-tenant/agent/skill cost metering; OTel collectors for unified observability.
+- **Data Plane**: Redis for short-term session context; pgvector (tenant-partitioned) for long-term semantic memory; a Lifecycle State Store for immutable audit trails of all four-tier transitions; a Cost Attribution Store (TimescaleDB) for per-tenant/agent/skill cost metering; OTel collectors for unified observability. The Tenant Settings Store (`tenant_settings` table) is managed by the Admin Plane for storing tenant metadata, quotas, and status.
 - **Security Plane (Cross-Cutting)**: Istio enforces mTLS between all services. The Internal STS issues short-lived (5-min TTL), scoped OIDC tokens for every agent and sub-agent invocation. The Secret Rotation Service manages automated credential rotation and leak detection.
 - **Inference Plane**: A centralized LLM API Gateway (e.g., LiteLLM) proxies all model requests. Model selection is configurable per sub-agent — members of the same team can target different providers without changing the team manifest structure.
 
@@ -150,6 +166,112 @@ The **Manifest Assistant** is the first platform system agent. It helps no-code 
 - System agent workflows follow the same durable execution model as user agents.
 - On failure (LLM provider timeout, activity retry exhaustion), the workflow emits a `type: "error"` event; frontend gracefully handles errors and displays fallback UI.
 - Multiple sequential messages from the same user form a **session** (tracked by session ID); memory is preserved across turns.
+
+---
+
+## 1.2 Admin Plane (Platform Governance Architecture)
+
+The **Admin Plane** is a dedicated governance layer that separates platform operations from user-facing agent creation and execution. It provides platform administrators with tenancy management, LLM provider configuration, cost attribution, audit logging, and cross-tenant observability.
+
+### Admin API Service (`services/admin-api`, port 8089)
+
+A thin Go aggregator service acting as the single source of truth for platform governance data. Key design principles:
+
+1. **Strong Authentication**: Every endpoint (except `/health`) requires `Authorization: Bearer <ADMIN_API_KEY>` validation. Admin API keys are long-lived secrets, rotated quarterly.
+
+2. **Cross-Tenant Visibility**: Unlike user APIs which enforce tenant isolation via `X-Tenant-ID` headers, the Admin API queries Temporal and PostgreSQL **without tenant filters**, providing platform-wide aggregation. Example: `GET /api/v1/admin/executions` returns execution traces across all tenants; user `GET /api/v1/agents` would only return agents in the caller's tenant.
+
+3. **DB-Backed Configuration**: LLM provider config (URLs, API keys) is persisted to the `platform_config` table, enabling durability across service restarts. Changes via `PUT /api/v1/admin/llm/config` update both the LLM Gateway in-memory state and the database immediately.
+
+4. **Data Aggregation**:
+   - **Tenant CRUD**: Direct queries to `tenant_settings` table. Updates enforce constraints (e.g., token_budget must be > 0). Quota enforcement is delegated to the API Gateway (soft/hard limits).
+   - **Cost Aggregation**: Queries `cost_events` table grouped by tenant, agent, skill, model. Computes estimated costs using configurable rate tables.
+   - **Audit Log**: Direct queries to `lifecycle_events` table with resource type and state change filtering.
+   - **LLM Config Proxying**: Acts as a proxy to LLM Gateway's internal `/admin/config` endpoint; persists updates to DB.
+
+5. **Rate Limiting & DDoS Protection**: 1000 req/min per admin key; 10000 req/min aggregate. Excess requests return `429 TooManyRequests`. IP-based circuit breaker blocks IPs exceeding 10k req/min for 5 minutes.
+
+### Admin Console (`apps/admin-console`, port 3001)
+
+A Next.js web application providing graphical administration interfaces. Key architectural decisions:
+
+1. **Auth via SessionStorage**: Admin API key is stored in `sessionStorage` (cleared on browser close) after verification via `POST /api/v1/admin/auth/verify`. All subsequent requests include the key in the `Authorization` header.
+
+2. **React Query for State**: Uses TanStack Query with 5-minute `staleTime` for data freshness and retry logic (1 retry on failure). Dashboard auto-refreshes every 30 seconds.
+
+3. **Independent Deployment**: Runs on a separate hostname/port from Agent Studio. No cross-console communication allowed. CORS restricted: Admin Console only talks to Admin API.
+
+4. **Page Structure**:
+   - **`/login`** — Accepts admin key; validates via `POST /api/v1/admin/auth/verify`
+   - **`/dashboard`** — Summary cards, health checks, recent executions
+   - **`/tenants`** — Full CRUD: list, create (modal), detail view with quota editing and status toggles
+   - **`/llm-config`** — Mode selection, provider config (URL, keys), per-tenant model allowlists
+   - **`/system-agents`** — List/edit system agents; deploy transitions
+   - **`/executions`** — Cross-tenant execution visualizer with DAG rendering and live streaming
+   - **`/cost`** — Per-tenant cost breakdown by agent, skill, model with CSV export
+   - **`/audit`** — Immutable audit log with filtering and export
+
+### Admin-Specific Data Model
+
+Three new PostgreSQL tables persist admin governance state:
+
+```sql
+CREATE TABLE tenant_settings (
+    tenant_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',  -- active | suspended | archived
+    max_concurrent_workflows INT DEFAULT 50,
+    token_budget_monthly BIGINT DEFAULT 10000000,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE tenant_model_access (
+    tenant_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    enabled BOOLEAN DEFAULT TRUE,
+    daily_token_limit BIGINT DEFAULT NULL,  -- NULL = unlimited
+    PRIMARY KEY (tenant_id, model_id)
+);
+
+CREATE TABLE platform_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Rows: ('llm_proxy_url', '...'), ('anthropic_api_key_encrypted', '...'), ('mode', 'anthropic')
+```
+
+### Admin API Routes
+
+| **Method** | **Route** | **Purpose** |
+|---|---|---|
+| POST | `/api/v1/admin/auth/verify` | Validate admin key; return role |
+| GET | `/api/v1/admin/tenants` | List all tenants with metadata |
+| POST | `/api/v1/admin/tenants` | Create new tenant with defaults |
+| GET | `/api/v1/admin/tenants/:id` | Fetch tenant detail (counts, quotas) |
+| PUT | `/api/v1/admin/tenants/:id/quota` | Update max workflows and budget |
+| PUT | `/api/v1/admin/tenants/:id/status` | Activate/suspend/archive |
+| GET | `/api/v1/admin/llm/config` | Fetch current LLM config |
+| PUT | `/api/v1/admin/llm/config` | Update config + DB persistence |
+| GET | `/api/v1/admin/llm/access` | List models and per-tenant access |
+| PUT | `/api/v1/admin/llm/access/:tenant_id` | Set model allowlist + limits |
+| GET | `/api/v1/admin/system-agents` | List platform system agents |
+| GET | `/api/v1/admin/system-agents/:id` | Fetch single system agent manifest |
+| PUT | `/api/v1/admin/system-agents/:id` | Update manifest |
+| POST | `/api/v1/admin/system-agents/:id/transition` | Lifecycle transition |
+| GET | `/api/v1/admin/executions` | Query execution traces (all tenants) |
+| GET | `/api/v1/admin/executions/:id` | Fetch single execution + DAG |
+| GET | `/api/v1/admin/cost` | Aggregate cost data |
+| GET | `/api/v1/admin/cost/:tenant_id` | Per-tenant cost breakdown |
+| GET | `/api/v1/admin/audit` | Query audit log |
+
+### Integration Points
+
+- **LLM Gateway**: Admin API proxies config queries to LLM Gateway's internal `/admin/config` endpoint.
+- **Temporal**: Admin API queries Temporal SDK for workflow history and execution traces.
+- **PostgreSQL**: Reads/writes to `tenant_settings`, `tenant_model_access`, `platform_config`, `cost_events`, `lifecycle_events` tables.
+- **Agent Studio API Gateway**: API Gateway enforces tenant-scoped quotas from `tenant_settings` (max_concurrent_workflows, token_budget_monthly).
 
 ---
 

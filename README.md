@@ -26,37 +26,43 @@ A1 Agent Engine is a complete platform for agentic AI applications. It enables:
 ### Setup (5 minutes)
 
 ```bash
-# 1. Start backing services (Postgres, Redis, Temporal)
+# 1. Start backing services (Postgres, Redis, Temporal, Admin API)
 cd infra/local
 docker-compose up -d
 
-# 2. Frontend (Terminal 1)
+# 2. Agent Studio Frontend (Terminal 1)
 cd apps/agent-studio
 npm run dev
 # → http://localhost:3000
 
-# 3. API Gateway (Terminal 2)
+# 3. Admin Console Frontend (Terminal 2)
+cd apps/admin-console
+npm run dev
+# → http://localhost:3001 (login with key: dev-admin-key)
+
+# 4. API Gateway (Terminal 3)
 cd services/api-gateway
 go install github.com/cosmtrek/air@latest
 air
 # → http://localhost:8080
 
-# 4. Workflow Initiator (Terminal 3)
+# 5. Workflow Initiator (Terminal 4)
 cd services/workflow-initiator
 air
 
-# 5. Agent Workers (Terminal 4)
+# 6. Agent Workers (Terminal 5)
 cd services/agent-workers
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 python -m temporal.worker
 
-# 6. Verify health
+# 7. Verify health
 curl http://localhost:8080/health
+curl http://localhost:8089/health
 ```
 
-**Note:** Frontend runs on host, not Docker, for rapid development iteration.
+**Note:** Frontends run on host, not Docker, for rapid development iteration. Admin API runs in Docker and is automatically started with `docker-compose up -d`.
 
 ## 🏗️ Architecture
 
@@ -90,8 +96,11 @@ Agent Teams (Orchestration, decomposition, synthesis)
 | Skill Dispatcher | 8085 | Go | Tool routing; hooks |
 | Sub-Agent Registry | 8084 | Go | Sub-agent contracts |
 | Agent Registry | 8088 | Go | Agent manifests |
+| **Admin Plane** | | | |
+| Admin API | 8089 | Go | Platform admin backend; tenant mgmt |
 | **Frontend & Observability** | | | |
 | Agent Studio | 3000 | Next.js | Builder UI; Ops Dashboard |
+| Admin Console | 3001 | Next.js | Platform administration UI |
 | Dashboard | 8501 | Streamlit | SRE observability |
 | **Data** | | | |
 | PostgreSQL | 5433 | - | Primary state store; pgvector; RLS |
@@ -133,10 +142,12 @@ a1-agent-engine/
 │   ├── skill-catalog/          # Skill composition
 │   ├── skill-dispatcher/       # Tool routing
 │   ├── sub-agent-registry/     # Sub-agent contracts
-│   └── agent-registry/         # Agent manifests
+│   ├── agent-registry/         # Agent manifests
+│   └── admin-api/              # Platform administration backend
 │
 ├── apps/
-│   └── agent-studio/           # Next.js frontend
+│   ├── agent-studio/           # Next.js frontend for agent builders
+│   └── admin-console/          # Next.js frontend for platform admins
 │
 ├── packages/
 │   ├── go-shared/              # Shared Go models
@@ -197,6 +208,49 @@ The **Manifest Assistant** is a platform system agent embedded in the Agent Crea
 - Manifest Assistant runs on an isolated `platform-system-agent-queue` (separate from user agent workflows)
 - Multi-turn conversation preserves context via session ID
 - LLM output is parsed to extract structured sections (`## System Prompt Draft`, `## Recommended Skills`)
+
+### Platform Administration
+
+The A1 Agent Engine includes a dedicated **Admin Plane** for platform operators, consisting of the **Admin API** backend service and **Admin Console** web application.
+
+#### Admin API (`services/admin-api`, port 8089)
+
+A thin Go aggregator service providing RESTful governance APIs. All endpoints (except `/health`) require `Authorization: Bearer <ADMIN_API_KEY>` header validation.
+
+**Key Endpoints:**
+- `POST /api/v1/admin/auth/verify` — Validate admin API key
+- `GET/POST /api/v1/admin/tenants` — List or create tenants
+- `GET/PUT /api/v1/admin/tenants/:id` — Fetch tenant or update quota/status
+- `GET/PUT /api/v1/admin/llm/config` — Query or update LLM provider configuration (persisted to DB)
+- `GET/PUT /api/v1/admin/llm/access` — Manage per-tenant model access allowlists
+- `GET/PUT /api/v1/admin/system-agents` — Query or update platform system agents (e.g., Manifest Assistant)
+- `GET /api/v1/admin/executions` — Cross-tenant execution trace queries
+- `GET /api/v1/admin/cost` — Per-tenant cost aggregation and attribution
+- `GET /api/v1/admin/audit` — Immutable audit log across all resources
+
+**Admin Console** (`apps/admin-console`, port 3001)
+
+A Next.js web application providing graphical administration. Login at http://localhost:3001 with default key: `dev-admin-key`.
+
+**Key Features:**
+- **Tenant Management** — Create tenants, set quotas (max concurrent workflows, monthly token budgets), suspend/activate tenants
+- **LLM Configuration** — Configure LLM proxy URLs and API keys, manage per-tenant model access allowlists, hot-reload without service restart
+- **System Agent Management** — View and edit platform system agent manifests (e.g., Manifest Assistant), manage lifecycle (draft → staged → active)
+- **Cross-Tenant Execution Visualizer** — Interactive trace viewer showing execution DAGs, event timelines, and cost annotations across all tenants
+- **Cost Tracking & Attribution** — Real-time cost aggregation: tokens, sandbox time, Vector DB operations. Per-tenant, per-agent, per-skill breakdown with monthly forecasting
+- **Audit Log** — Immutable record of all lifecycle events and administrative actions with filtering and export
+- **Dashboard** — Platform health overview: active tenants, active workflows, LLM mode, service health checks, recent executions
+
+**Admin Pages:**
+- `/login` — Admin API key authentication
+- `/dashboard` — Platform status, KPI summary, recent activities
+- `/tenants` — Tenant CRUD with inline quota editing and status toggles
+- `/tenants/[id]` — Tenant detail view (Overview, Agents, Cost, Model Access, Audit tabs)
+- `/llm-config` — LLM provider configuration and per-tenant model allowlisting
+- `/system-agents` — Platform system agent manifest management and deployment
+- `/executions` — Cross-tenant execution trace visualizer with filters and live streaming
+- `/cost` — Per-tenant cost breakdown with period selection and CSV export
+- `/audit` — Immutable audit log with resource filtering and compliance export
 
 ## 🛠️ Development
 
