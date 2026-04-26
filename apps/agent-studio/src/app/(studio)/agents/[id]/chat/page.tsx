@@ -21,7 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
-const API_GATEWAY = "http://localhost:8080";
+const API_GATEWAY = process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "http://localhost:8080";
 const TENANT_ID = process.env.NEXT_PUBLIC_TENANT_ID ?? "default-tenant";
 
 interface Message {
@@ -156,7 +156,7 @@ export default function ChatPage({
   const [streaming, setStreaming] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const esRef = useRef<EventSource | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
   const { data: agent } = useQuery({
     queryKey: ["agents", id],
@@ -172,6 +172,175 @@ export default function ChatPage({
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  const tryWebSocket = useCallback(
+    (text: string, assistantId: string, onFallback: () => void) => {
+      const wsURL = API_GATEWAY.replace(/^http/, "ws") + `/api/v1/agents/${id}/ws`;
+      const ws = new WebSocket(wsURL);
+      wsRef.current = ws;
+
+      const timeout = setTimeout(() => {
+        if (ws.readyState === WebSocket.CONNECTING) {
+          console.log("WebSocket timeout, falling back to SSE");
+          ws.close();
+          onFallback();
+        }
+      }, 2000);
+
+      ws.onopen = () => {
+        clearTimeout(timeout);
+        console.log("WebSocket connected");
+        ws.send(JSON.stringify({ message: text, tenant_id: TENANT_ID }));
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const event: ChatEvent = JSON.parse(e.data);
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m;
+              if (event.type === "text" && event.content) {
+                return { ...m, content: m.content + event.content };
+              }
+              if (event.type === "thinking" || event.type === "tool_call") {
+                return { ...m, events: [...(m.events ?? []), event] };
+              }
+              if (event.type === "done") {
+                return { ...m, streaming: false };
+              }
+              if (event.type === "error") {
+                return {
+                  ...m,
+                  content: m.content || `Error: ${event.content}`,
+                  streaming: false,
+                };
+              }
+              return m;
+            })
+          );
+
+          if (event.type === "done" || event.type === "error") {
+            ws.close();
+            setStreaming(false);
+          }
+        } catch {
+          // malformed JSON data — ignore
+        }
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timeout);
+        console.log("WebSocket error, falling back to SSE");
+        ws.close();
+        onFallback();
+      };
+    },
+    [id]
+  );
+
+  const useSSEFallback = useCallback(
+    (text: string, assistantId: string) => {
+      console.log("Using SSE fallback");
+      const sseURL = `${API_GATEWAY}/api/v1/agents/${id}/chat`;
+
+      // Send initial message via POST to start streaming
+      fetch(sseURL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Tenant-ID": TENANT_ID,
+        },
+        body: JSON.stringify({ message: text, tenant_id: TENANT_ID }),
+      })
+        .then((resp) => {
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const reader = resp.body?.getReader();
+          if (!reader) throw new Error("No response body");
+
+          const decoder = new TextDecoder();
+          const processStream = async () => {
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const text = decoder.decode(value, { stream: true });
+                const lines = text.split("\n");
+
+                for (const line of lines) {
+                  if (line.startsWith("data: ")) {
+                    try {
+                      const event: ChatEvent = JSON.parse(line.slice(6));
+                      setMessages((prev) =>
+                        prev.map((m) => {
+                          if (m.id !== assistantId) return m;
+                          if (event.type === "text" && event.content) {
+                            return { ...m, content: m.content + event.content };
+                          }
+                          if (event.type === "thinking" || event.type === "tool_call") {
+                            return { ...m, events: [...(m.events ?? []), event] };
+                          }
+                          if (event.type === "done") {
+                            return { ...m, streaming: false };
+                          }
+                          if (event.type === "error") {
+                            return {
+                              ...m,
+                              content: m.content || `Error: ${event.content}`,
+                              streaming: false,
+                            };
+                          }
+                          return m;
+                        })
+                      );
+
+                      if (event.type === "done" || event.type === "error") {
+                        setStreaming(false);
+                        return;
+                      }
+                    } catch {
+                      // malformed JSON — ignore
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              console.error("SSE stream error:", err);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? {
+                        ...m,
+                        content: m.content || "Connection error during streaming",
+                        streaming: false,
+                      }
+                    : m
+                )
+              );
+              setStreaming(false);
+            }
+          };
+
+          processStream();
+        })
+        .catch((err) => {
+          console.error("SSE setup error:", err);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    content: m.content || "Connection error. Is the API gateway running on :8080?",
+                    streaming: false,
+                  }
+                : m
+            )
+          );
+          setStreaming(false);
+        });
+    },
+    [id]
+  );
 
   const sendMessage = useCallback(() => {
     const text = input.trim();
@@ -195,61 +364,9 @@ export default function ChatPage({
     setInput("");
     setStreaming(true);
 
-    const url = `${API_GATEWAY}/api/v1/agents/${id}/chat?tenant_id=${encodeURIComponent(TENANT_ID)}&message=${encodeURIComponent(text)}`;
-    const es = new EventSource(url);
-    esRef.current = es;
-
-    es.onmessage = (e) => {
-      try {
-        const event: ChatEvent = JSON.parse(e.data);
-        setMessages((prev) =>
-          prev.map((m) => {
-            if (m.id !== assistantId) return m;
-            if (event.type === "text" && event.content) {
-              return { ...m, content: m.content + event.content };
-            }
-            if (event.type === "thinking" || event.type === "tool_call") {
-              return { ...m, events: [...(m.events ?? []), event] };
-            }
-            if (event.type === "done") {
-              return { ...m, streaming: false };
-            }
-            if (event.type === "error") {
-              return {
-                ...m,
-                content: m.content || `Error: ${event.content}`,
-                streaming: false,
-              };
-            }
-            return m;
-          })
-        );
-
-        if (event.type === "done" || event.type === "error") {
-          es.close();
-          setStreaming(false);
-        }
-      } catch {
-        // malformed SSE data — ignore
-      }
-    };
-
-    es.onerror = () => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? {
-                ...m,
-                content: m.content || "Connection error. Is the API gateway running on :8080?",
-                streaming: false,
-              }
-            : m
-        )
-      );
-      es.close();
-      setStreaming(false);
-    };
-  }, [id, input, streaming]);
+    // Try WebSocket first, fall back to SSE
+    tryWebSocket(text, assistantId, () => useSSEFallback(text, assistantId));
+  }, [id, input, streaming, tryWebSocket, useSSEFallback]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -259,7 +376,7 @@ export default function ChatPage({
   };
 
   useEffect(() => {
-    return () => esRef.current?.close();
+    return () => wsRef.current?.close();
   }, []);
 
   return (

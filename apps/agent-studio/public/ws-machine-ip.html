@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebSocket Machine IP Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+    .result { padding: 10px; margin: 10px 0; border: 1px solid #3e3e42; }
+    .pass { background: #1e4620; border-color: #4ec9b0; }
+    .fail { background: #3d1e1e; border-color: #f48771; }
+  </style>
+</head>
+<body>
+  <h1>WebSocket Machine IP Test (Bypass Zscaler)</h1>
+
+  <div class="result" id="result">
+    <strong>192.168.86.30:8080</strong><br>
+    <span id="text">Testing...</span>
+  </div>
+
+  <script>
+    const testConnection = (url, textId) => {
+      console.log('Connecting to:', url);
+      const ws = new WebSocket(url);
+      const timeout = setTimeout(() => {
+        ws.close();
+        document.getElementById(textId).textContent = '✗ Timeout (3s)';
+        document.getElementById('result').classList.add('fail');
+      }, 3000);
+
+      ws.onopen = () => {
+        clearTimeout(timeout);
+        document.getElementById(textId).textContent = '✓ Connected! WebSocket working!';
+        document.getElementById('result').classList.add('pass');
+        ws.send(JSON.stringify({message: 'hello', tenant_id: 'default-tenant'}));
+      };
+
+      ws.onmessage = (e) => {
+        console.log('Message received:', e.data.substring(0, 100));
+      };
+
+      ws.onerror = (e) => {
+        clearTimeout(timeout);
+        document.getElementById(textId).textContent = '✗ WebSocket error';
+        document.getElementById('result').classList.add('fail');
+        console.error('Error:', e);
+      };
+
+      ws.onclose = (e) => {
+        console.log('Close:', e.code, e.reason);
+      };
+    };
+
+    testConnection('ws://192.168.86.30:8080/api/v1/agents/test-agent-valid/ws', 'text');
+  </script>
+</body>
+</html>

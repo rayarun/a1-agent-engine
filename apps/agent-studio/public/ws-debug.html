@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebSocket Debug</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+    .log { background: #252526; padding: 15px; border: 1px solid #3e3e42; margin: 10px 0; max-height: 400px; overflow-y: auto; }
+    pre { margin: 0; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>WebSocket Debug Log</h1>
+  <div class="log" id="log">
+    <pre id="logs"></pre>
+  </div>
+
+  <script>
+    const logs = [];
+
+    const log = (msg) => {
+      const timestamp = new Date().toLocaleTimeString();
+      const entry = `[${timestamp}] ${msg}`;
+      logs.push(entry);
+      document.getElementById('logs').textContent = logs.join('\n');
+      console.log(entry);
+    };
+
+    log('Starting WebSocket tests...');
+    log(`User Agent: ${navigator.userAgent.substring(0, 80)}`);
+
+    const testWS = (url) => {
+      log(`\nConnecting to: ${url}`);
+      const ws = new WebSocket(url);
+
+      ws.addEventListener('open', () => {
+        log(`✓ OPEN (readyState=${ws.readyState})`);
+      });
+
+      ws.addEventListener('error', (e) => {
+        log(`✗ ERROR event fired`);
+        log(`  - type: ${e.type}`);
+        log(`  - target.readyState: ${e.target.readyState}`);
+        log(`  - target.url: ${e.target.url}`);
+        if (e.message) log(`  - message: ${e.message}`);
+      });
+
+      ws.addEventListener('close', (e) => {
+        log(`✓ CLOSE (code=${e.code}, reason="${e.reason}", wasClean=${e.wasClean})`);
+      });
+
+      setTimeout(() => {
+        if (ws.readyState === WebSocket.CONNECTING) {
+          log(`⚠ Still connecting after 2s...`);
+        }
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({message: 'hello'}));
+        } else if (ws.readyState !== WebSocket.CLOSED) {
+          ws.close();
+        }
+      }, 2000);
+    };
+
+    log('Test 1: Native API Gateway');
+    testWS('ws://localhost:8080/api/v1/agents/test-agent-valid/ws');
+
+    setTimeout(() => {
+      log('\nTest 2: Simple echo at different port');
+      testWS('ws://localhost:9000/');
+    }, 3000);
+  </script>
+</body>
+</html>

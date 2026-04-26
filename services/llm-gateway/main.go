@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sashabaranov/go-openai"
@@ -29,7 +30,20 @@ type remoteModelsResponse struct {
 	} `json:"data"`
 }
 
+type configResponse struct {
+	AnthropicBaseURL string `json:"anthropic_base_url"`
+	AnthropicKeySet  bool   `json:"anthropic_key_set"`
+	OpenAIKeySet     bool   `json:"openai_key_set"`
+	Mode             string `json:"mode"`
+}
+
+type configRequest struct {
+	AnthropicAPIKey string `json:"anthropic_api_key"`
+	AnthropicBaseURL string `json:"anthropic_base_url"`
+}
+
 var (
+	mu           sync.RWMutex
 	openaiClient *openai.Client
 	anthropicKey string
 	anthropicURL string
@@ -60,15 +74,20 @@ func init() {
 }
 
 func fetchRemoteModels() ([]string, error) {
-	if anthropicKey == "" || anthropicURL == "" {
+	mu.RLock()
+	key := anthropicKey
+	url := anthropicURL
+	mu.RUnlock()
+
+	if key == "" || url == "" {
 		return nil, fmt.Errorf("anthropic not configured")
 	}
 
-	modelsURL := strings.TrimSuffix(anthropicURL, "/messages") + "/models"
+	modelsURL := strings.TrimSuffix(url, "/messages") + "/models"
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, _ := http.NewRequest("GET", modelsURL, nil)
-	req.Header.Set("x-api-key", anthropicKey)
+	req.Header.Set("x-api-key", key)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
 	resp, err := client.Do(req)
@@ -96,6 +115,70 @@ func fetchRemoteModels() ([]string, error) {
 	return models, nil
 }
 
+func getMode() string {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	if anthropicKey == "" {
+		return "mock"
+	}
+	if anthropicURL != "https://api.anthropic.com/v1/messages" {
+		return "custom"
+	}
+	return "anthropic"
+}
+
+func handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	resp := configResponse{
+		AnthropicBaseURL: anthropicURL,
+		AnthropicKeySet:  anthropicKey != "",
+		OpenAIKeySet:     openaiClient != nil,
+		Mode:             getMode(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func handlePutConfig(w http.ResponseWriter, r *http.Request) {
+	var req configRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	mu.Lock()
+	if req.AnthropicAPIKey != "" {
+		anthropicKey = req.AnthropicAPIKey
+		log.Println("LLM Gateway: Updated ANTHROPIC_API_KEY")
+	}
+
+	if req.AnthropicBaseURL != "" {
+		anthropicURL = req.AnthropicBaseURL
+		log.Printf("LLM Gateway: Updated ANTHROPIC_BASE_URL to %s", anthropicURL)
+	}
+
+	baseURL := anthropicURL
+	keySet := anthropicKey != ""
+	openaiSet := openaiClient != nil
+	mu.Unlock()
+
+	mode := getMode()
+
+	resp := configResponse{
+		AnthropicBaseURL: baseURL,
+		AnthropicKeySet:  keySet,
+		OpenAIKeySet:     openaiSet,
+		Mode:             mode,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
 func main() {
 	mux := http.NewServeMux()
 
@@ -103,6 +186,8 @@ func main() {
 	mux.HandleFunc("GET /v1/models", handleModels)
 	mux.HandleFunc("POST /v1/chat/completions", handleChatCompletions)
 	mux.HandleFunc("POST /v1/embeddings", handleEmbeddings)
+	mux.HandleFunc("GET /admin/config", handleGetConfig)
+	mux.HandleFunc("PUT /admin/config", handlePutConfig)
 
 	log.Println("Starting LLM Gateway on :8083")
 	if err := http.ListenAndServe(":8083", withCORS(mux)); err != nil {
@@ -113,8 +198,8 @@ func main() {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, x-tenant-id")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -179,7 +264,11 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.Contains(req.Model, "claude") && anthropicKey != "" {
+	mu.RLock()
+	hasAnthropicKey := anthropicKey != ""
+	mu.RUnlock()
+
+	if strings.Contains(req.Model, "claude") && hasAnthropicKey {
 		handleAnthropicInference(w, req)
 		return
 	}
@@ -290,6 +379,11 @@ type anthropicResponse struct {
 func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRequest) {
 	log.Printf("Anthropic Inference (Raw HTTP): Handling request for model %s", req.Model)
 
+	mu.RLock()
+	key := anthropicKey
+	url := anthropicURL
+	mu.RUnlock()
+
 	antReq := anthropicRequest{
 		Model:     req.Model,
 		MaxTokens: req.MaxTokens,
@@ -356,9 +450,9 @@ func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRe
 
 	// Execute HTTP Request
 	body, _ := json.Marshal(antReq)
-	httpReq, _ := http.NewRequest("POST", anthropicURL, bytes.NewBuffer(body))
+	httpReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", anthropicKey)
+	httpReq.Header.Set("x-api-key", key)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
 	client := &http.Client{}
@@ -433,7 +527,12 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 		log.Printf("LLM Gateway: Fetched %d models from remote endpoint", len(remoteModels))
 	} else {
 		log.Printf("LLM Gateway: Failed to fetch remote models (%v), using fallback", err)
-		if anthropicKey != "" {
+
+		mu.RLock()
+		hasAnthropicKey := anthropicKey != ""
+		mu.RUnlock()
+
+		if hasAnthropicKey {
 			models = append(models,
 				modelInfo{"claude-opus-4-7", "Claude Opus 4.7"},
 				modelInfo{"claude-sonnet-4-6", "Claude Sonnet 4.6"},

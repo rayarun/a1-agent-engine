@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>API Connection Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    .test { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+    .pass { background: #cfe9fc; }
+    .fail { background: #f8d7da; }
+  </style>
+</head>
+<body>
+  <h1>API Gateway Connection Test</h1>
+
+  <div class="test" id="http-test">
+    <strong>HTTP Request to /health:</strong>
+    <div id="http-result">Testing...</div>
+  </div>
+
+  <div class="test" id="ws-test">
+    <strong>WebSocket to /api/v1/agents/test-agent-valid/ws:</strong>
+    <div id="ws-result">Testing...</div>
+  </div>
+
+  <script>
+    const updateResult = (id, success, message) => {
+      const el = document.getElementById(id);
+      el.className = success ? 'pass' : 'fail';
+      el.textContent = message;
+    };
+
+    // Test HTTP
+    fetch('http://localhost:8080/health')
+      .then(r => {
+        if (r.ok) {
+          return r.text().then(t => updateResult('http-result', true, '✓ ' + t));
+        }
+        updateResult('http-result', false, '✗ Status: ' + r.status);
+      })
+      .catch(e => updateResult('http-result', false, '✗ Error: ' + e.message));
+
+    // Test WebSocket
+    setTimeout(() => {
+      console.log('Attempting WebSocket connection to ws://localhost:8080/...');
+      const ws = new WebSocket('ws://localhost:8080/api/v1/agents/test-agent-valid/ws');
+      const timeout = setTimeout(() => {
+        console.log('WebSocket timeout - no response after 3s');
+        ws.close();
+        updateResult('ws-result', false, '✗ Timeout (no response after 3s)');
+      }, 3000);
+
+      ws.onopen = () => {
+        console.log('WebSocket opened successfully');
+        clearTimeout(timeout);
+        updateResult('ws-result', true, '✓ WebSocket connected (readyState=' + ws.readyState + ')');
+        ws.close();
+      };
+
+      ws.onerror = (e) => {
+        console.error('WebSocket error:', e);
+        clearTimeout(timeout);
+        const msg = e.reason ? '✗ Error: ' + e.reason : '✗ Error: Unknown (check console for details)';
+        updateResult('ws-result', false, msg);
+      };
+
+      ws.onclose = (e) => {
+        console.log('WebSocket closed:', e.code, e.reason);
+        clearTimeout(timeout);
+      };
+    }, 500);
+  </script>
+</body>
+</html>

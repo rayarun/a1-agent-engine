@@ -22,6 +22,12 @@ RUN go build -o /llm-gateway main.go
 # --- Final Stage ---
 FROM alpine:latest
 
+# Copy CA certificates from builder
+RUN sed -i "s/https/http/g" /etc/apk/repositories && \
+    apk add --no-cache ca-certificates && \
+    sed -i "s/http/https/g" /etc/apk/repositories
+COPY --from=builder /etc/ssl/certs /etc/ssl/certs
+
 WORKDIR /
 COPY --from=builder /llm-gateway /llm-gateway
 

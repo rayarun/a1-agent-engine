@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebSocket IP Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; }
+    .result { padding: 10px; margin: 10px 0; border: 1px solid #3e3e42; }
+    .pass { background: #1e4620; border-color: #4ec9b0; }
+    .fail { background: #3d1e1e; border-color: #f48771; }
+  </style>
+</head>
+<body>
+  <h1>WebSocket Connection Test</h1>
+
+  <div class="result" id="localhost-result">
+    <strong>localhost:8080</strong><br>
+    <span id="localhost-text">Testing...</span>
+  </div>
+
+  <div class="result" id="ip-result">
+    <strong>127.0.0.1:8080</strong><br>
+    <span id="ip-text">Testing...</span>
+  </div>
+
+  <script>
+    const testConnection = (url, resultId, textId) => {
+      return new Promise((resolve) => {
+        const ws = new WebSocket(url);
+        const timeout = setTimeout(() => {
+          ws.close();
+          document.getElementById(textId).textContent = '✗ Timeout (2s)';
+          document.getElementById(resultId).classList.add('fail');
+          resolve(false);
+        }, 2000);
+
+        ws.onopen = () => {
+          clearTimeout(timeout);
+          document.getElementById(textId).textContent = '✓ Connected!';
+          document.getElementById(resultId).classList.add('pass');
+          ws.close();
+          resolve(true);
+        };
+
+        ws.onerror = () => {
+          clearTimeout(timeout);
+          document.getElementById(textId).textContent = '✗ WebSocket error (code 1006)';
+          document.getElementById(resultId).classList.add('fail');
+          resolve(false);
+        };
+      });
+    };
+
+    Promise.all([
+      testConnection('ws://localhost:8080/api/v1/agents/test-agent-valid/ws', 'localhost-result', 'localhost-text'),
+      testConnection('ws://127.0.0.1:8080/api/v1/agents/test-agent-valid/ws', 'ip-result', 'ip-text')
+    ]);
+  </script>
+</body>
+</html>

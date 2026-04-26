@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/agent-platform/go-shared/pkg/models"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 )
 
 // IdempotencyStore deduplicates inbound webhook events by idempotency key.
@@ -154,6 +157,7 @@ func (h *GatewayHandler) HandleGetSessionStatus(w http.ResponseWriter, r *http.R
 
 // HandleChatStream starts an agent workflow for the given agent ID and streams
 // its events back to the caller as Server-Sent Events.
+// Supports both GET (query params) and POST (JSON body) for message input.
 func (h *GatewayHandler) HandleChatStream(w http.ResponseWriter, r *http.Request) {
 	agentID := r.PathValue("id")
 	if agentID == "" {
@@ -161,13 +165,27 @@ func (h *GatewayHandler) HandleChatStream(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// EventSource only supports GET; read message and tenant from query params.
-	message := r.URL.Query().Get("message")
+	var message, tenantID string
+
+	if r.Method == http.MethodPost {
+		var chatReq models.ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&chatReq); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		message = chatReq.Message
+		tenantID = chatReq.TenantID
+	} else {
+		// GET: read from query params
+		message = r.URL.Query().Get("message")
+		tenantID = r.URL.Query().Get("tenant_id")
+	}
+
 	if message == "" {
-		http.Error(w, "message query param is required", http.StatusBadRequest)
+		http.Error(w, "message is required", http.StatusBadRequest)
 		return
 	}
-	tenantID := r.URL.Query().Get("tenant_id")
+
 	if tenantID == "" {
 		tenantID = r.Header.Get("X-Tenant-ID")
 	}
@@ -241,43 +259,156 @@ func (h *GatewayHandler) HandleChatStream(w http.ResponseWriter, r *http.Request
 		default:
 		}
 
-		// Drain any new events from the workflow query.
-		if evResp, err := poll.Get(fmt.Sprintf("%s/api/v1/sessions/%s/events?from=%d", h.InitiatorURL, session.WorkflowID, cursor)); err == nil {
-			var events []models.AgentEvent
-			if json.NewDecoder(evResp.Body).Decode(&events) == nil && len(events) > 0 {
-				for _, ev := range events {
-					writeEvent(ev)
-					cursor++
+		// Fetch events and status in a single poll call.
+		pollURL := fmt.Sprintf("%s/api/v1/sessions/%s/poll?from=%d", h.InitiatorURL, session.WorkflowID, cursor)
+		if pollResp, err := poll.Get(pollURL); err == nil {
+			var pr models.PollResponse
+			if json.NewDecoder(pollResp.Body).Decode(&pr) == nil {
+				// Stream any new events.
+				if len(pr.Events) > 0 {
+					for _, ev := range pr.Events {
+						writeEvent(ev)
+						cursor++
+					}
+					flusher.Flush()
 				}
-				flusher.Flush()
+				// Check if workflow is terminal.
+				if terminal[pr.Status] {
+					if pr.Status != "COMPLETED" {
+						writeEvent(models.AgentEvent{Type: "error", Content: pr.Status})
+					}
+					flusher.Flush()
+					pollResp.Body.Close()
+					return
+				}
 			}
-			evResp.Body.Close()
+			pollResp.Body.Close()
 		}
 
-		// Check workflow status.
-		stURL := fmt.Sprintf("%s/api/v1/sessions/%s", h.InitiatorURL, session.WorkflowID)
-		if stResp, err := poll.Get(stURL); err == nil {
-			var st models.SessionStatus
-			if json.NewDecoder(stResp.Body).Decode(&st) == nil && terminal[st.Status] {
-				stResp.Body.Close()
-				// Final drain to pick up any events emitted just before completion.
-				drainURL := fmt.Sprintf("%s/api/v1/sessions/%s/events?from=%d", h.InitiatorURL, session.WorkflowID, cursor)
-				if drainResp, err := poll.Get(drainURL); err == nil {
-					var events []models.AgentEvent
-					if json.NewDecoder(drainResp.Body).Decode(&events) == nil {
-						for _, ev := range events {
-							writeEvent(ev)
-						}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// HandleChatWS upgrades to WebSocket and streams agent events using the /poll endpoint.
+func (h *GatewayHandler) HandleChatWS(w http.ResponseWriter, r *http.Request) {
+	_ = r
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		http.Error(w, "agent id is required", http.StatusBadRequest)
+		return
+	}
+
+	// Upgrade to WebSocket
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		OriginPatterns: []string{"localhost:3000", "localhost:3001", "127.0.0.1:*"},
+	})
+	if err != nil {
+		fmt.Printf("WebSocket upgrade failed for %s: %v\n", r.URL.Path, err)
+		http.Error(w, fmt.Sprintf("WebSocket upgrade failed: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer conn.Close(websocket.StatusInternalError, "")
+
+	// Read initial chat request
+	// Use Background context instead of request context since WebSocket takes over the connection
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var chatReq models.ChatRequest
+	if err := wsjson.Read(ctx, conn, &chatReq); err != nil {
+		conn.Close(websocket.StatusProtocolError, fmt.Sprintf("read error: %v", err))
+		return
+	}
+
+	message := chatReq.Message
+	if message == "" {
+		message = "Hello"
+	}
+	tenantID := chatReq.TenantID
+	if tenantID == "" {
+		tenantID = r.Header.Get("X-Tenant-ID")
+	}
+	if tenantID == "" {
+		tenantID = "default-tenant"
+	}
+
+	// Start the workflow
+	startReq := models.StartSessionRequest{
+		AgentID:   agentID,
+		SessionID: fmt.Sprintf("chat-%d", time.Now().UnixMilli()),
+		TenantID:  tenantID,
+		Prompt:    message,
+	}
+	body, _ := json.Marshal(startReq)
+	initiatorResp, err := http.Post(
+		fmt.Sprintf("%s/api/v1/sessions", h.InitiatorURL),
+		"application/json",
+		bytes.NewBuffer(body),
+	)
+	if err != nil {
+		wsjson.Write(r.Context(), conn, models.AgentEvent{Type: "error", Content: fmt.Sprintf("failed to start session: %v", err)})
+		conn.Close(websocket.StatusInternalError, "")
+		return
+	}
+	defer initiatorResp.Body.Close()
+
+	if initiatorResp.StatusCode != http.StatusCreated {
+		var buf bytes.Buffer
+		buf.ReadFrom(initiatorResp.Body)
+		wsjson.Write(r.Context(), conn, models.AgentEvent{Type: "error", Content: fmt.Sprintf("initiator error: %s", buf.String())})
+		conn.Close(websocket.StatusInternalError, "")
+		return
+	}
+
+	var session models.SessionStatus
+	if err := json.NewDecoder(initiatorResp.Body).Decode(&session); err != nil {
+		wsjson.Write(r.Context(), conn, models.AgentEvent{Type: "error", Content: "failed to decode session"})
+		conn.Close(websocket.StatusInternalError, "")
+		return
+	}
+
+	poll := &http.Client{Timeout: 5 * time.Second}
+	cursor := 0
+	terminal := map[string]bool{
+		"COMPLETED": true, "FAILED": true,
+		"CANCELED": true, "TIMED_OUT": true, "TERMINATED": true,
+	}
+
+	// Poll loop
+	for {
+		select {
+		case <-r.Context().Done():
+			conn.Close(websocket.StatusNormalClosure, "")
+			return
+		default:
+		}
+
+		// Fetch events and status in a single poll call
+		pollURL := fmt.Sprintf("%s/api/v1/sessions/%s/poll?from=%d", h.InitiatorURL, session.WorkflowID, cursor)
+		if pollResp, err := poll.Get(pollURL); err == nil {
+			var pr models.PollResponse
+			if json.NewDecoder(pollResp.Body).Decode(&pr) == nil {
+				// Stream any new events
+				for _, ev := range pr.Events {
+					if err := wsjson.Write(r.Context(), conn, ev); err != nil {
+						pollResp.Body.Close()
+						conn.Close(websocket.StatusInternalError, "")
+						return
 					}
-					drainResp.Body.Close()
+					cursor++
 				}
-				if st.Status != "COMPLETED" {
-					writeEvent(models.AgentEvent{Type: "error", Content: st.Status})
+
+				// Check if workflow is terminal
+				if terminal[pr.Status] {
+					if pr.Status != "COMPLETED" {
+						wsjson.Write(r.Context(), conn, models.AgentEvent{Type: "error", Content: pr.Status})
+					}
+					pollResp.Body.Close()
+					conn.Close(websocket.StatusNormalClosure, "")
+					return
 				}
-				flusher.Flush()
-				return
 			}
-			stResp.Body.Close()
+			pollResp.Body.Close()
 		}
 
 		time.Sleep(50 * time.Millisecond)

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebSocket Server Comparison</title>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    .test { margin: 15px 0; padding: 15px; border: 2px solid #ccc; }
+    .pass { background: #cfe9fc; border-color: #0c5460; }
+    .fail { background: #f8d7da; border-color: #721c24; }
+    h2 { margin: 0 0 10px 0; }
+  </style>
+</head>
+<body>
+  <h1>WebSocket Server Comparison</h1>
+
+  <div class="test" id="go-test">
+    <h2>Go Server (localhost:8080)</h2>
+    <div id="go-result">Testing...</div>
+  </div>
+
+  <div class="test" id="node-test">
+    <h2>Node.js Server (localhost:9000)</h2>
+    <div id="node-result">Testing...</div>
+  </div>
+
+  <script>
+    const testWS = (url, resultId) => {
+      return new Promise((resolve) => {
+        const ws = new WebSocket(url);
+        const timeout = setTimeout(() => {
+          ws.close();
+          updateResult(resultId, false, '✗ Timeout (3s)');
+          resolve(false);
+        }, 3000);
+
+        ws.onopen = () => {
+          clearTimeout(timeout);
+          updateResult(resultId, true, '✓ Connected (readyState=' + ws.readyState + ')');
+          ws.close();
+          resolve(true);
+        };
+
+        ws.onerror = (e) => {
+          clearTimeout(timeout);
+          updateResult(resultId, false, '✗ Error (check console)');
+          console.error(url, '- WebSocket error:', e);
+          resolve(false);
+        };
+
+        ws.onclose = (e) => {
+          clearTimeout(timeout);
+          if (e.code !== 1000 && e.code !== 1006) {
+            console.log(url, '- Close code:', e.code);
+          }
+        };
+      });
+    };
+
+    const updateResult = (id, success, message) => {
+      const el = document.getElementById(id);
+      el.className = success ? 'pass' : 'fail';
+      el.textContent = message;
+    };
+
+    // Test both servers
+    Promise.all([
+      testWS('ws://localhost:8080/api/v1/agents/test-agent-valid/ws', 'go-result'),
+      testWS('ws://localhost:9000/', 'node-result')
+    ]).then(() => {
+      console.log('Tests complete');
+    });
+  </script>
+</body>
+</html>

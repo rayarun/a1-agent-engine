@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebSocket Test</title>
+</head>
+<body>
+  <h1>WebSocket Connection Test</h1>
+  <div id="status">Connecting...</div>
+  <div id="log"></div>
+  <script>
+    const log = (msg) => {
+      const logDiv = document.getElementById('log');
+      logDiv.innerHTML += msg + '<br>';
+      console.log(msg);
+    };
+
+    const ws = new WebSocket('ws://localhost:8080/api/v1/agents/test-agent-valid/ws');
+
+    ws.onopen = () => {
+      log('WebSocket connected!');
+      document.getElementById('status').textContent = 'Connected';
+      ws.send(JSON.stringify({ message: 'hello', tenant_id: 'default-tenant' }));
+    };
+
+    ws.onmessage = (e) => {
+      log('Message: ' + e.data);
+    };
+
+    ws.onerror = (err) => {
+      log('Error: ' + JSON.stringify(err));
+      document.getElementById('status').textContent = 'Error: ' + err;
+    };
+
+    ws.onclose = () => {
+      log('WebSocket closed');
+      document.getElementById('status').textContent = 'Closed';
+    };
+  </script>
+</body>
+</html>

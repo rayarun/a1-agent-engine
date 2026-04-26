@@ -8,12 +8,31 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/agent-platform/go-shared/pkg/models"
 	enumspb "go.temporal.io/api/enums/v1"
 	workflowservice "go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+)
+
+type cachedManifest struct {
+	manifest  *models.AgentManifest
+	expiresAt time.Time
+}
+
+var (
+	manifestStore      sync.Map
+	registryHTTPClient = &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+	manifestTTL = 5 * time.Minute
 )
 
 // EncodedQueryValue wraps a Temporal query result so it can be decoded into a Go value.
@@ -181,13 +200,70 @@ func HandleGetSessionEvents(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(all[from:])
 }
 
+// HandlePollSession returns both events (from cursor) and workflow status in a single response.
+func HandlePollSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "workflow id is required", http.StatusBadRequest)
+		return
+	}
+	if temporalClient == nil {
+		http.Error(w, "Temporal client not connected", http.StatusServiceUnavailable)
+		return
+	}
+
+	from := 0
+	if s := r.URL.Query().Get("from"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			from = n
+		}
+	}
+
+	// Query events
+	val, err := temporalClient.QueryWorkflow(r.Context(), id, "", "get_events")
+	events := []models.AgentEvent{}
+	if err == nil {
+		var all []models.AgentEvent
+		if err := val.Get(&all); err == nil && from < len(all) {
+			events = all[from:]
+		}
+	}
+
+	// Query status
+	desc, err := temporalClient.DescribeWorkflowExecution(context.Background(), id, "")
+	status := "UNKNOWN"
+	if err == nil {
+		status = mapTemporalStatus(desc.WorkflowExecutionInfo.Status)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(models.PollResponse{
+		Events: events,
+		Status: status,
+	})
+}
+
 // HandleHealth returns service health.
 func HandleHealth(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Workflow Initiator is healthy\n")
 }
 
-// fetchManifest calls the agent-registry to retrieve the AgentManifest for agentID.
+// fetchManifest retrieves the AgentManifest for agentID, using a cache with TTL.
 func fetchManifest(ctx context.Context, agentID, tenantID string) *models.AgentManifest {
+	cacheKey := agentID
+	if tenantID != "" {
+		cacheKey = fmt.Sprintf("%s:%s", tenantID, agentID)
+	}
+
+	// Check cache
+	if cached, ok := manifestStore.Load(cacheKey); ok {
+		cm := cached.(cachedManifest)
+		if time.Now().Before(cm.expiresAt) {
+			return cm.manifest
+		}
+	}
+
+	// Cache miss or expired — fetch from registry
 	registryURL := os.Getenv("AGENT_REGISTRY_URL")
 	if registryURL == "" {
 		registryURL = "http://localhost:8088"
@@ -202,7 +278,7 @@ func fetchManifest(ctx context.Context, agentID, tenantID string) *models.AgentM
 		req.Header.Set("X-Tenant-ID", tenantID)
 	}
 
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := registryHTTPClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return nil
 	}
@@ -212,6 +288,13 @@ func fetchManifest(ctx context.Context, agentID, tenantID string) *models.AgentM
 	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
 		return nil
 	}
+
+	// Store in cache with TTL
+	manifestStore.Store(cacheKey, cachedManifest{
+		manifest:  &manifest,
+		expiresAt: time.Now().Add(manifestTTL),
+	})
+
 	return &manifest
 }
 

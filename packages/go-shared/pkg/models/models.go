@@ -268,6 +268,12 @@ type SessionStatus struct {
 	Result     string `json:"result,omitempty"`
 }
 
+// PollResponse combines events and workflow status into a single response.
+type PollResponse struct {
+	Events []AgentEvent `json:"events"`
+	Status string       `json:"status"`
+}
+
 // IdempotencyEntry is stored in Redis and Postgres for webhook deduplication.
 type IdempotencyEntry struct {
 	WorkflowID string    `json:"workflow_id"`

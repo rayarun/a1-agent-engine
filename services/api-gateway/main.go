@@ -12,6 +12,14 @@ import (
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/agents/test-agent-valid/ws" {
+			log.Printf("WebSocket request: method=%s, upgrade=%s, connection=%s", r.Method, r.Header.Get("Upgrade"), r.Header.Get("Connection"))
+		}
+		// Skip CORS handling for WebSocket upgrade requests
+		if r.Header.Get("Upgrade") == "websocket" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Tenant-ID")
@@ -49,7 +57,8 @@ func main() {
 	mux.HandleFunc("GET /health", h.HandleHealth)
 	mux.Handle("POST /api/v1/agents/{agent_id}/trigger", hmacMW(http.HandlerFunc(h.HandleTriggerAgent)))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/status", h.HandleGetSessionStatus)
-	mux.HandleFunc("GET /api/v1/agents/{id}/chat", h.HandleChatStream)
+	mux.HandleFunc("/api/v1/agents/{id}/chat", h.HandleChatStream)
+	mux.HandleFunc("GET /api/v1/agents/{id}/ws", h.HandleChatWS)
 
 	log.Printf("Starting API Gateway on :8080 (Initiator: %s)", initiatorURL)
 	if err := http.ListenAndServe(":8080", withCORS(mux)); err != nil {

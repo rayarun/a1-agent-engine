@@ -321,12 +321,12 @@ export const ManifestAssistantPanel: React.FC<ManifestAssistantPanelProps> = ({
                     ...lastMsg,
                     content: (lastMsg.content || "") + (event.content || ""),
                   };
-                } else if (event.type === "done") {
+                } else if (event.type === "done" || event.type === "error") {
                   updated[updated.length - 1] = {
                     ...lastMsg,
                     streaming: false,
                   };
-                  // Extract draft on completion
+                  // Extract draft on completion (even if error occurred)
                   const draft = extractAssistantDraft(lastMsg.content || "");
                   setApplyable(draft);
                 }

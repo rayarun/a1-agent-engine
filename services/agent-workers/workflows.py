@@ -29,17 +29,15 @@ class AgentWorkflow:
         max_iterations = int(manifest.get("max_iterations") or 5)
         skills = manifest.get("skills") or []
 
-        # 1. Recall relevant memories
-        past_memories = await workflow.execute_activity(
+        # 1. Start recall_memories as non-blocking handle
+        recall_handle = workflow.start_activity(
             "recall_memories",
             args=[prompt, agent_id],
             start_to_close_timeout=timedelta(seconds=10),
             retry_policy=RetryPolicy(maximum_attempts=2),
         )
-        if past_memories:
-            system_prompt += "\n\nPast findings/memories:\n- " + "\n- ".join(past_memories)
 
-        # Build LLM tool definitions: built-in execute_code + one entry per skill ref
+        # Build LLM tool definitions concurrently while recall is in flight
         tool_defs = [_execute_code_tool_def()]
         for skill_ref in skills:
             tool_defs.append(_skill_tool_def(skill_ref["name"]))
@@ -48,6 +46,12 @@ class AgentWorkflow:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ]
+
+        # Await recall result and patch system prompt if memories found
+        past_memories = await recall_handle
+        if past_memories:
+            system_prompt += "\n\nPast findings/memories:\n- " + "\n- ".join(past_memories)
+            messages[0] = {"role": "system", "content": system_prompt}
 
         self._emit({"type": "thinking", "content": f"Starting reasoning for: {prompt[:80]}"})
 
@@ -60,6 +64,10 @@ class AgentWorkflow:
                 "reasoning_step",
                 args=[messages, model, tool_defs],
                 start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=3,
+                    non_retryable_error_types=["BadRequestError"],
+                ),
             )
 
             content = step_result.get("content")
@@ -128,15 +136,15 @@ class AgentWorkflow:
             final_answer = "Exceeded max reasoning iterations without a conclusion."
 
         self._emit({"type": "text", "content": final_answer})
+        self._emit({"type": "done"})
 
-        # 3. Persist memory
-        await workflow.execute_activity(
+        # 3. Fire-and-forget store_memory (start without awaiting)
+        workflow.start_activity(
             "store_memory",
             args=[f"Observation for '{prompt}': {final_answer}", agent_id],
             start_to_close_timeout=timedelta(seconds=10),
         )
 
-        self._emit({"type": "done"})
         return f"Agent {agent_id} completed: {final_answer}"
 
 
