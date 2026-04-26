@@ -57,7 +57,8 @@ func main() {
 	mux.HandleFunc("GET /health", h.HandleHealth)
 	mux.Handle("POST /api/v1/agents/{agent_id}/trigger", hmacMW(http.HandlerFunc(h.HandleTriggerAgent)))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/status", h.HandleGetSessionStatus)
-	mux.HandleFunc("/api/v1/agents/{id}/chat", h.HandleChatStream)
+	mux.HandleFunc("GET /api/v1/agents/{id}/chat", h.HandleChatStream)
+	mux.HandleFunc("POST /api/v1/agents/{id}/chat", h.HandleChatStream)
 	mux.HandleFunc("GET /api/v1/agents/{id}/ws", h.HandleChatWS)
 
 	log.Printf("Starting API Gateway on :8080 (Initiator: %s)", initiatorURL)

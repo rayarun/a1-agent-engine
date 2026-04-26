@@ -120,11 +120,16 @@ class AgentWorkflow:
                     # Patch result into the already-emitted tool_call event
                     self._events[-1]["result"] = str(result)
 
+                    # Add tool result as a user message (Anthropic format requires tool_result in user message)
                     messages.append({
-                        "tool_call_id": tc["id"],
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": str(result),
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tc["id"],
+                                "content": str(result),
+                            }
+                        ],
                     })
                 continue
 
