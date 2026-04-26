@@ -111,21 +111,20 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
         New Agent
       </SheetTrigger>
       <SheetContent className="sm:max-w-[1000px] overflow-hidden flex flex-col p-0">
-        <div className="flex flex-col h-full">
-          {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-            <SheetTitle>Create Agent</SheetTitle>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setShowAssistant(!showAssistant)}
-              className="gap-2"
-            >
-              <Sparkles size={16} />
-              {showAssistant ? "Hide" : "Show"} Assistant
-            </Button>
-          </div>
+        <SheetHeader className="border-b border-border px-6 py-4 flex flex-row items-center justify-between">
+          <SheetTitle className="text-lg font-semibold">Create Agent</SheetTitle>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAssistant(!showAssistant)}
+            className="gap-2"
+          >
+            <Sparkles size={16} />
+            {showAssistant ? "Hide" : "Show"} Assistant
+          </Button>
+        </SheetHeader>
+        <div className="flex flex-col h-full flex-1">
 
           {/* Content: split pane or single pane */}
           <div className="flex flex-1 overflow-hidden">
