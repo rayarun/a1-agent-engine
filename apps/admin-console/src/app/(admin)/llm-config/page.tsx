@@ -1,36 +1,60 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Loader2, AlertCircle, Save, Eye, EyeOff } from "lucide-react";
+import { adminApi } from "@/lib/api";
 
 export default function LLMConfigPage() {
   const [showApiKey, setShowApiKey] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   const [config, setConfig] = useState({
     mode: "anthropic",
     anthropic_base_url: "https://api.anthropic.com",
-    anthropic_api_key: "sk-ant-****",
+    anthropic_api_key: "",
     openai_api_key: "",
   });
 
-  async function handleSave() {
-    setIsSaving(true);
-    setSaveError("");
-    setSaveSuccess(false);
+  const { data: fetchedConfig, isLoading } = useQuery({
+    queryKey: ["llm-config"],
+    queryFn: () => adminApi.getLLMConfig(),
+  });
 
-    try {
-      // TODO: Call admin API to save config
-      await new Promise((resolve) => setTimeout(resolve, 500));
+  useEffect(() => {
+    if (fetchedConfig) {
+      setConfig((prev) => ({
+        ...prev,
+        mode: fetchedConfig.mode || "anthropic",
+        anthropic_base_url: fetchedConfig.anthropic_base_url || "https://api.anthropic.com",
+        anthropic_api_key: fetchedConfig.anthropic_key_set ? "••••••••" : "",
+        openai_api_key: fetchedConfig.openai_key_set ? "••••••••" : "",
+      }));
+    }
+  }, [fetchedConfig]);
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      return adminApi.putLLMConfig({
+        anthropic_base_url: config.anthropic_base_url,
+        anthropic_api_key: config.anthropic_api_key && !config.anthropic_api_key.startsWith("•") ? config.anthropic_api_key : undefined,
+        openai_api_key: config.openai_api_key && !config.openai_api_key.startsWith("•") ? config.openai_api_key : undefined,
+      });
+    },
+    onSuccess: () => {
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
-    } catch (err) {
+    },
+    onError: (err) => {
       setSaveError(err instanceof Error ? err.message : "Failed to save configuration");
-    } finally {
-      setIsSaving(false);
-    }
+    },
+  });
+
+  async function handleSave() {
+    setSaveError("");
+    setSaveSuccess(false);
+    await saveMutation.mutateAsync();
   }
 
   const modes = [
@@ -170,10 +194,10 @@ export default function LLMConfigPage() {
           <div className="flex gap-2 pt-6">
             <button
               onClick={handleSave}
-              disabled={isSaving}
+              disabled={saveMutation.isPending || isLoading}
               className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
             >
-              {isSaving ? (
+              {saveMutation.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Saving...

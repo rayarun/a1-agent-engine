@@ -91,4 +91,53 @@ export const adminApi = {
     if (!response.ok) throw new Error("Failed to update tenant status");
     return response.json();
   },
+
+  async getLLMConfig(): Promise<any> {
+    const response = await request("GET", "/api/v1/admin/llm/config");
+    if (!response.ok) throw new Error("Failed to fetch LLM config");
+    return response.json();
+  },
+
+  async putLLMConfig(data: {
+    anthropic_api_key?: string;
+    anthropic_base_url?: string;
+    openai_api_key?: string;
+  }): Promise<any> {
+    const response = await request("PUT", "/api/v1/admin/llm/config", data);
+    if (!response.ok) throw new Error("Failed to update LLM config");
+    return response.json();
+  },
+
+  async listSystemAgents(): Promise<any> {
+    const response = await request("GET", "/api/v1/admin/system-agents");
+    if (!response.ok) throw new Error("Failed to fetch system agents");
+    return response.json();
+  },
+
+  async getSystemAgent(agentId: string): Promise<any> {
+    const response = await request("GET", `/api/v1/admin/system-agents/${agentId}`);
+    if (!response.ok) throw new Error("Failed to fetch system agent");
+    return response.json();
+  },
+
+  async updateSystemAgent(
+    agentId: string,
+    data: {
+      name?: string;
+      version?: string;
+      system_prompt?: string;
+      model?: string;
+      max_iterations?: number;
+      memory_budget_mb?: number;
+      status?: string;
+    }
+  ): Promise<any> {
+    const response = await request(
+      "PUT",
+      `/api/v1/admin/system-agents/${agentId}`,
+      data
+    );
+    if (!response.ok) throw new Error("Failed to update system agent");
+    return response.json();
+  },
 };
