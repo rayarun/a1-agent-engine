@@ -13,6 +13,7 @@ A1 Agent Engine is a complete platform for agentic AI applications. It enables:
 - **Tool Ecosystem** — Build and compose tools, organize into skills, version-control everything
 - **Enterprise Security** — HMAC webhook validation, OIDC token issuance, JIT credential fetching
 - **Real-Time Observability** — Stream agent events as Server-Sent Events or WebSocket, monitor via Temporal UI
+- **AI-Assisted Agent Design** — Embedded Manifest Assistant helps no-code users design agent manifests conversationally, recommending skills and drafting system prompts in real-time
 
 ## 🚀 Quick Start
 
@@ -177,6 +178,25 @@ All agent execution backed by Temporal workflows—resumable from last checkpoin
 - **Temporal UI**: Workflow history, task queue depth, signal monitoring
 - **Streamlit Dashboard**: SRE-focused metrics and logs
 - **Structured Logging**: JSON logs with tenant context
+
+### AI-Assisted Agent Design (Manifest Assistant)
+
+The **Manifest Assistant** is a platform system agent embedded in the Agent Creation UI. It helps no-code users design agent manifests conversationally:
+
+1. **Open Agent Creation Dialog** → Manifest Assistant panel appears on the right
+2. **Describe Your Agent** → E.g., "I need a customer support agent that handles ticket routing"
+3. **Assistant Recommends**:
+   - ✨ **System Prompt Draft** — Persona-driven prompt tailored to your needs
+   - 🛠️ **Skill Recommendations** — Exact skills from your catalog with explanations
+   - 🔧 **Skill Gaps** — Proposes new skills to create if the catalog lacks capabilities
+4. **Real-Time Streaming** → Responses appear as they're computed via Server-Sent Events
+5. **One-Click Apply** → Click "Apply to Form" to auto-populate system prompt and skills
+
+**How It Works Internally:**
+- Frontend injects the live skill/tool catalog as context (`<catalog>` XML block) into the first message
+- Manifest Assistant runs on an isolated `platform-system-agent-queue` (separate from user agent workflows)
+- Multi-turn conversation preserves context via session ID
+- LLM output is parsed to extract structured sections (`## System Prompt Draft`, `## Recommended Skills`)
 
 ## 🛠️ Development
 

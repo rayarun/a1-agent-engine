@@ -32,6 +32,7 @@ graph TD
         AgentRegistry --> Policy[RBAC and Policy Engine]
         UI --> Simulator[Agent Testing Simulator]
         UI --> LifecycleMgr[Lifecycle and Deployment Manager]
+        UI --> ManifestAssistant[Manifest Assistant Chat UI]
     end
 
     subgraph Orchestration_Plane
@@ -39,6 +40,7 @@ graph TD
         WebhookValidator --> Workflow[Temporal Workflow Engine]
         Workflow --> AgentWorker[Single-Agent Worker]
         Workflow --> TeamOrchestrator[Team Orchestrator]
+        Workflow --> SystemAgentWorker[System Agent Worker - platform-system queue]
         TeamOrchestrator --> SubAgentDispatcher[Sub-Agent Dispatcher]
         SubAgentDispatcher -.->|parallel fan-out| AgentWorker
         AgentWorker --> HITL[HITL and Signal Manager]
@@ -72,28 +74,84 @@ graph TD
     end
 
     AgentRegistry -.-> Gateway
+    ManifestAssistant -.-> Gateway
     AgentWorker --> SkillDispatcher
+    SystemAgentWorker --> SkillDispatcher
     SkillDispatcher --> Router
     Router --> Sandbox
     Router --> InternalAPI
     AgentWorker --> ShortMem
+    SystemAgentWorker --> ShortMem
     AgentWorker --> LongMem
+    SystemAgentWorker --> LongMem
     AgentWorker --> OTel
+    SystemAgentWorker --> OTel
     TeamOrchestrator --> CostStore
     LifecycleMgr --> LifecycleStore
     AgentWorker --> LLMRouter
+    SystemAgentWorker --> LLMRouter
     LLMRouter --> PublicLLM
     LLMRouter --> LocalLLM
     Security_Plane -.->|cross-cutting| Orchestration_Plane
     Security_Plane -.->|cross-cutting| Execution_Plane
 ```
 
-- **Control Plane**: The command center for all four tiers. Platform engineers register Tools via the Tool Registry (security review required). Skill Developers compose Tools into Skills in the Skill Catalog. Sub-Agent Developers define capability contracts in the Sub-Agent Registry. No-Code creators wire Sub-Agents into Team Manifests and Agent Manifests. The Lifecycle Manager governs state transitions and deployment strategies across all tiers.
-- **Orchestration Plane (The Brain)**: The Agent API Gateway validates inbound requests (HMAC on webhooks) and routes to the Temporal Workflow Engine. For single agents, the engine dispatches to an Agent Worker. For teams, it dispatches to the Team Orchestrator, which fans out to the Sub-Agent Dispatcher, launching parallel Agent Workers per sub-agent. HITL signals propagate team-wide, suspending all parallel branches.
+- **Control Plane**: The command center for all four tiers. Platform engineers register Tools via the Tool Registry (security review required). Skill Developers compose Tools into Skills in the Skill Catalog. Sub-Agent Developers define capability contracts in the Sub-Agent Registry. No-Code creators wire Sub-Agents into Team Manifests and Agent Manifests. The Lifecycle Manager governs state transitions and deployment strategies across all tiers. The **Manifest Assistant Chat UI** is embedded in the Agent Creation dialog, allowing users to interactively design agent manifests with AI assistance.
+- **Orchestration Plane (The Brain)**: The Agent API Gateway validates inbound requests (HMAC on webhooks) and routes to the Temporal Workflow Engine. For single agents, the engine dispatches to an Agent Worker. For teams, it dispatches to the Team Orchestrator, which fans out to the Sub-Agent Dispatcher, launching parallel Agent Workers per sub-agent. HITL signals propagate team-wide, suspending all parallel branches. A **System Agent Worker** pool runs on the isolated `platform-system-agent-queue` for platform system agents (e.g., Manifest Assistant), keeping platform automation separate from user workflows.
 - **Execution Plane (The Hands)**: The Skill Dispatcher receives slash-command-style invocations, validates arguments, fires pre/post hooks, and routes tool chains through the Tool Router. The Tool Router dispatches to Ephemeral Sandboxes (arbitrary code) or Internal Go Microservices (typed platform APIs).
 - **Data Plane**: Redis for short-term session context; pgvector (tenant-partitioned) for long-term semantic memory; a Lifecycle State Store for immutable audit trails of all four-tier transitions; a Cost Attribution Store (TimescaleDB) for per-tenant/agent/skill cost metering; OTel collectors for unified observability.
 - **Security Plane (Cross-Cutting)**: Istio enforces mTLS between all services. The Internal STS issues short-lived (5-min TTL), scoped OIDC tokens for every agent and sub-agent invocation. The Secret Rotation Service manages automated credential rotation and leak detection.
 - **Inference Plane**: A centralized LLM API Gateway (e.g., LiteLLM) proxies all model requests. Model selection is configurable per sub-agent — members of the same team can target different providers without changing the team manifest structure.
+
+## 1.1 Platform System Agents (Manifest Assistant Architecture)
+
+Platform system agents are specialized agents owned and operated by the platform to enhance user experience and operator efficiency. They are distinct from user agents in several ways:
+
+**Tenant Strategy (No Schema Changes)**
+- System agents operate under a reserved `tenant_id: "platform-system"` — no database schema changes required.
+- User tenant queries (e.g., `GET /api/v1/agents` with header `X-Tenant-ID: my-tenant`) never return platform system agents. They are visible only via explicit platform-system requests.
+- This is a **convention-based isolation** pattern: the frontend and API Gateway enforce multi-tenancy via headers; the database does not distinguish platform agents from user agents.
+
+**Isolated Execution Queue**
+- Platform system agents run on an isolated Temporal task queue: `platform-system-agent-queue`.
+- A dedicated **System Agent Worker** instance (scaled independently from user Agent Workers) consumes tasks from this queue.
+- This isolation ensures platform automation (e.g., Manifest Assistant drafting prompts) does not contend for resources with user workflows.
+
+**Manifest Assistant Agent (V1 Reference Implementation)**
+The **Manifest Assistant** is the first platform system agent. It helps no-code users design agent manifests conversationally:
+
+1. **Catalog Context Injection**: 
+   - Frontend fetches active skills and approved tools via `skillsApi.list("active")` and `toolsApi.list("approved")`.
+   - These are serialized into a compact `<catalog>` XML block: `<catalog>\nskills:\n  - name: "...", version: "...", description: "..."\ntools:\n  - name: "...", version: "..."\n</catalog>`
+   - User's first message is enriched: `<catalog>...\n\nUser request: [user input]`
+   - **No API changes needed** — catalog awareness is purely a frontend concern.
+
+2. **Threefold Guidance**:
+   - **System Prompt Drafting**: Generates a persona-driven system prompt (starting with "You are...") based on user description.
+   - **Skill Recommendation**: Recommends exact skills from the catalog by name and version. Never hallucinations.
+   - **Skill Gap Detection**: When catalog lacks a capability, proposes a new skill manifest (`## Skills/Tools to Create`) — users can export and hand to Skill Developers.
+
+3. **Streaming Response via SSE**:
+   - `POST /api/v1/agents/manifest-assistant/chat` accepts `{ message: string, tenant_id: "platform-system" }`.
+   - Returns Server-Sent Events stream with events: `{ type: "thinking" | "tool_call" | "text" | "done" | "error", ... }`.
+   - Frontend renders thinking blocks (collapsible), tool calls (code execution logs), and final structured response in real-time.
+
+4. **One-Click Apply**:
+   - Frontend parses response for `## System Prompt Draft` and `## Recommended Skills` headers using regex.
+   - Displays preview of system prompt and skill recommendations.
+   - User clicks "Apply to Form" → values are auto-populated into the Agent Creation form via React Hook Form's `setValue()` and `replace()`.
+
+**Message Format Compatibility**
+- Manifest Assistant is powered by a capable LLM (e.g., Claude Sonnet).
+- Messages follow Anthropic API format: assistant messages with tool_call blocks; user messages with tool_result blocks (not "role": "tool").
+- LLM Gateway routes system agent requests to the configured proxy endpoint (e.g., custom Anthropic inference endpoint with Bearer token auth).
+
+**Idempotency & Resilience**
+- System agent workflows follow the same durable execution model as user agents.
+- On failure (LLM provider timeout, activity retry exhaustion), the workflow emits a `type: "error"` event; frontend gracefully handles errors and displays fallback UI.
+- Multiple sequential messages from the same user form a **session** (tracked by session ID); memory is preserved across turns.
+
+---
 
 ## 2. Physical Architecture (AWS Native)
 Maps the logical components to an AWS cloud-native environment, utilizing managed services.
@@ -108,6 +166,7 @@ graph LR
         AdminUI_Pod[Agent Studio UI Pods]
         API_Pod[Platform API Pods - with Istio sidecar]
         Worker_Pod[Agent Worker Pods - with Istio sidecar]
+        SystemWorker_Pod[System Agent Worker Pods - platform-system queue - with Istio sidecar]
         TeamOrch_Pod[Team Orchestrator Pods - with Istio sidecar]
         SubAgentReg_Pod[Sub-Agent Registry Pods]
         SkillDisp_Pod[Skill Dispatcher Pods]

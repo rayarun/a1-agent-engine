@@ -32,13 +32,15 @@ To contextualize the platform's requirements, the following journeys illustrate 
 
 * **Step 1:** A Domain Expert logs into **Agent Studio** using Enterprise SSO.
 
-* **Step 2:** They create a new agent, defining its "System Prompt" (e.g., "You are an L1 Database Support Agent").
+* **Step 2:** They create a new agent. The **Agent Creation Dialog** now includes an **AI-Powered Manifest Assistant** panel that helps them design the agent. They describe what the agent should do (e.g., "Handle customer support ticket routing and escalation").
 
-* **Step 3:** Using a visual dropdown, they attach pre-approved **Skills** from the **Skill Catalog** (e.g., `Database Triage Skill v2.1.0`). The Studio enforces explicit version pinning — wildcards are disallowed in production manifests. Under the hood, each skill safely bundles primitive tools (`query_slow_logs`, `check_db_cpu`) with InfoSec-approved Standard Operating Procedures (SOPs).
+* **Step 3:** The **Manifest Assistant** converses naturally with them, drafting a "System Prompt" and recommending pre-approved **Skills** from the **Skill Catalog** (e.g., `Email Sender Skill v1.0.0`, `Ticket Database Skill v2.1.0`). The assistant understands the catalog of available skills and tools via context injection, and can propose new skills if catalog gaps exist. With one click, they apply the assistant's recommendations directly to the form.
 
-* **Step 4:** They open the **Agent Simulator** in the Studio to chat with the drafted agent. They watch the execution trace graph in real-time to ensure it utilizes its skills correctly.
+* **Step 4:** Using a visual dropdown, they attach the assistant-recommended (or manually selected) **Skills** from the **Skill Catalog**. The Studio enforces explicit version pinning — wildcards are disallowed in production manifests. Under the hood, each skill safely bundles primitive tools with InfoSec-approved Standard Operating Procedures (SOPs).
 
-* **Step 5:** Satisfied, they select a **Canary** rollout strategy and click "Deploy." The platform generates the YAML manifest, provisions Temporal workers, and initially routes 10% of traffic to the new version — automatically rolling back if the workflow success rate drops below baseline.
+* **Step 5:** They open the **Agent Simulator** in the Studio to chat with the drafted agent. They watch the execution trace graph in real-time to ensure it utilizes its skills correctly.
+
+* **Step 6:** Satisfied, they select a **Canary** rollout strategy and click "Deploy." The platform generates the YAML manifest, provisions Temporal workers, and initially routes 10% of traffic to the new version — automatically rolling back if the workflow success rate drops below baseline.
 
 ### Journey 2: Resilient Task Execution (Persona: End User & System)
 
@@ -110,7 +112,8 @@ These requirements define the core capabilities of the platform, prioritized for
 
 | **ID** | **Priority** | **Requirement** | **Description** |
 | ----- | ----- | ----- | ----- |
-| **FR1** | **P0** | **Agent Studio & Manifest Builder** | Provide an Agent Studio with five builder surfaces: Agent Builder (persona, skills, memory constraints, YAML export), Tool Registry UI (register and review tool specs), Skill Builder (compose tools + SOPs, publish versioned skills), Sub-Agent Registry (define capability contracts), and Team Manifest Editor (wire sub-agents with coordination strategy). |
+| **FR1** | **P0** | **Agent Studio & Manifest Builder** | Provide an Agent Studio with five builder surfaces: Agent Builder (persona, skills, memory constraints, YAML export), Tool Registry UI (register and review tool specs), Skill Builder (compose tools + SOPs, publish versioned skills), Sub-Agent Registry (define capability contracts), and Team Manifest Editor (wire sub-agents with coordination strategy). Includes an AI-powered Manifest Assistant to guide no-code users through agent design. |
+| **FR1a** | **P0** | **AI-Assisted Manifest Design (Manifest Assistant)** | Embed a conversational AI assistant within the Agent Creation UI. The assistant helps no-code users design agent manifests by: (1) drafting system prompts based on user description; (2) recommending appropriate skills from the active catalog; (3) proposing new skill/tool definitions when catalog gaps exist. The assistant has access to the live catalog of skills and tools (injected as context). Responses stream in real-time via Server-Sent Events (SSE), and users can apply suggestions directly to the form with one click. The assistant is itself a platform agent (reserved `tenant_id: "platform-system"`, running on a dedicated task queue) powered by a capable LLM. |
 | **FR2** | **P0** | **Durable Execution Loop** | Agents and Agent Teams must execute within a resilient Temporal-backed loop. System failures, pod crashes, and API rate limits must not lose state — execution resumes exactly at the last committed step. Sub-agent failures within a team are retried independently; the team does not restart from the beginning. |
 | **FR3** | **P0** | **Dynamic Tool Registry** | Support tool registration via MCP discovery or manual PR-based spec submission (typed JSON schema: inputs, outputs, auth level, sandboxing requirement). All tools require a security review approval gate before catalog availability. Tools are semantically versioned; breaking changes require a new major version. |
 | **FR4** | **P0** | **Skill Catalog** | Senior Engineers compose approved Tools with System Operating Procedures (SOPs) into versioned, governed Skills. Skills use semver; production agent manifests must pin explicit versions. Deprecated skills display automated impact analysis (which agents are affected) and a migration path in Agent Studio. |
@@ -387,6 +390,33 @@ The platform exposes a unified command interface for invoking skills.
 - The agent's LLM reasoning loop emits skill invocations as structured tool calls; the platform's **Skill Dispatcher** translates these into skill + argument payloads and routes them through the Execution Plane.
 - **Hooks**: The platform supports declarative pre/post-skill hooks for cross-cutting concerns — audit logging, cost metering, HITL interception, rate limit enforcement — without modifying skill logic.
 - **Routing**: The Tool Router evaluates RBAC, quota availability, and sandboxing requirements before dispatching any tool chain. A failed pre-dispatch check returns a structured rejection with reason code, not a silent failure.
+
+---
+
+### 6.2a Platform System Agents (Manifest Assistant)
+
+The platform reserves a special tenant (`tenant_id: "platform-system"`) for deploying system agents that enhance the user experience without requiring code.
+
+**Manifest Assistant Agent**
+The first platform system agent is the **Manifest Assistant**, embedded in the Agent Creation UI. It helps no-code users design agent manifests conversationally:
+
+1. **Catalog Awareness via Context Injection**: When a user opens the Agent Creation dialog, the frontend fetches the live catalog (active skills + approved tools) and injects it as a structured `<catalog>` XML block prepended to the user's first message. The Manifest Assistant parses this block and uses it to ground recommendations.
+
+2. **Threefold Assistance**:
+   - **System Prompt Drafting**: Based on user description, the assistant drafts a natural, persona-driven system prompt starting with "You are..." and incorporating domain constraints.
+   - **Skill Recommendation**: The assistant recommends specific skills from the catalog (by exact name and version), with explanations of why each skill is appropriate.
+   - **New Skill Proposals**: When the catalog lacks a capability, the assistant proposes a new skill manifest (name, description, input/output schema, mutating flag) — a "skill to create" section that the user can export and hand to a Skill Developer.
+
+3. **Real-Time SSE Streaming**: The assistant's responses stream in real-time via Server-Sent Events, showing thinking blocks, tool calls (e.g., code execution for analyzing routing logic), and final recommendations as they're computed.
+
+4. **One-Click Apply**: Users see a preview of the assistant's recommendations (system prompt, skills list) and click "Apply to Form" to auto-populate the Agent Creation form fields — no copy-paste required.
+
+5. **Isolated Execution**: The Manifest Assistant runs on its own Temporal task queue (`platform-system-agent-queue`) with a second Agent Worker instance, ensuring no interference with user agent workflows.
+
+**V2 Roadmap**: Extend platform system agents to include:
+- **Skill Designer Assistant**: Helps Skill Developers compose tools and write SOPs interactively
+- **Incident Runbook Generator**: Analyzes agent failure logs and auto-generates runbooks and alerts
+- **Cost Optimizer**: Recommends skill/model/sampling strategy trade-offs to reduce tenant costs
 
 ---
 
