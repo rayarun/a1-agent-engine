@@ -459,6 +459,265 @@ func (h *AdminHandler) HandleUpdateSystemAgent(w http.ResponseWriter, r *http.Re
 	json.NewEncoder(w).Encode(a)
 }
 
+// HandleListExecutions returns recent execution sessions across all tenants.
+func (h *AdminHandler) HandleListExecutions(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if _, err := fmt.Sscanf(l, "%d", &limit); err == nil && limit > 0 && limit <= 100 {
+			// limit is valid
+		} else {
+			limit = 20
+		}
+	}
+
+	// For now, return mock execution data.
+	// TODO: Query Temporal or workflow-initiator for real execution history
+	type ExecutionRow struct {
+		SessionID  string    `json:"session_id"`
+		TenantID   string    `json:"tenant_id"`
+		AgentID    string    `json:"agent_id"`
+		Status     string    `json:"status"`
+		StartTime  time.Time `json:"start_time"`
+		EndTime    *time.Time `json:"end_time,omitempty"`
+		DurationMS int       `json:"duration_ms"`
+		EventCount int       `json:"event_count"`
+	}
+
+	executions := []ExecutionRow{}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"executions": executions,
+		"count":      len(executions),
+	})
+}
+
+// HandleGetExecution returns a single execution with its events.
+func (h *AdminHandler) HandleGetExecution(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if sessionID == "" {
+		http.Error(w, "session_id is required", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// TODO: Query Temporal or workflow-initiator for execution details
+	http.Error(w, "Execution not found", http.StatusNotFound)
+}
+
+// HandleGetExecutionEvents returns event stream for a single execution.
+func (h *AdminHandler) HandleGetExecutionEvents(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if sessionID == "" {
+		http.Error(w, "session_id is required", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// TODO: Query Temporal or workflow-initiator for execution events
+	http.Error(w, "Execution not found", http.StatusNotFound)
+}
+
+// HandleGetCostSummary returns aggregate cost data across all tenants.
+func (h *AdminHandler) HandleGetCostSummary(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		period = "30d"
+	}
+
+	// Parse period (e.g., "7d", "30d", "90d")
+	days := 30
+	if strings.HasSuffix(period, "d") {
+		if _, err := fmt.Sscanf(period, "%dd", &days); err == nil {
+			// parsed successfully
+		}
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT tenant_id, SUM(tokens_in) as tokens_in, SUM(tokens_out) as tokens_out, SUM(sandbox_ms) as sandbox_ms
+		FROM cost_events
+		WHERE time > NOW() - INTERVAL '1 day' * $1
+		GROUP BY tenant_id
+		ORDER BY (SUM(tokens_in) + SUM(tokens_out)) DESC
+	`, days)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Query failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type CostRow struct {
+		TenantID  string `json:"tenant_id"`
+		TokensIn  int64  `json:"tokens_in"`
+		TokensOut int64  `json:"tokens_out"`
+		SandboxMS int64  `json:"sandbox_ms"`
+	}
+
+	var costs []CostRow
+	for rows.Next() {
+		var c CostRow
+		if err := rows.Scan(&c.TenantID, &c.TokensIn, &c.TokensOut, &c.SandboxMS); err != nil {
+			http.Error(w, fmt.Sprintf("Scan failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		costs = append(costs, c)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"costs":   costs,
+		"period":  period,
+		"count":   len(costs),
+	})
+}
+
+// HandleGetCostByTenant returns cost breakdown for a specific tenant.
+func (h *AdminHandler) HandleGetCostByTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("tenant_id")
+	if tenantID == "" {
+		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		period = "30d"
+	}
+
+	days := 30
+	if strings.HasSuffix(period, "d") {
+		if _, err := fmt.Sscanf(period, "%dd", &days); err == nil {
+			// parsed successfully
+		}
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT agent_id, skill_id, SUM(tokens_in) as tokens_in, SUM(tokens_out) as tokens_out, SUM(sandbox_ms) as sandbox_ms
+		FROM cost_events
+		WHERE tenant_id = $1 AND time > NOW() - INTERVAL '1 day' * $2
+		GROUP BY agent_id, skill_id
+		ORDER BY (SUM(tokens_in) + SUM(tokens_out)) DESC
+	`, tenantID, days)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Query failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type CostBreakdown struct {
+		AgentID   *string `json:"agent_id"`
+		SkillID   *string `json:"skill_id"`
+		TokensIn  int64   `json:"tokens_in"`
+		TokensOut int64   `json:"tokens_out"`
+		SandboxMS int64   `json:"sandbox_ms"`
+	}
+
+	var breakdown []CostBreakdown
+	for rows.Next() {
+		var c CostBreakdown
+		if err := rows.Scan(&c.AgentID, &c.SkillID, &c.TokensIn, &c.TokensOut, &c.SandboxMS); err != nil {
+			http.Error(w, fmt.Sprintf("Scan failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		breakdown = append(breakdown, c)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"tenant_id": tenantID,
+		"breakdown": breakdown,
+		"period":    period,
+		"count":     len(breakdown),
+	})
+}
+
+// HandleGetAuditLog returns immutable audit events with filtering.
+func (h *AdminHandler) HandleGetAuditLog(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if _, err := fmt.Sscanf(l, "%d", &limit); err == nil && limit > 0 && limit <= 250 {
+			// limit is valid
+		} else {
+			limit = 50
+		}
+	}
+
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if _, err := fmt.Sscanf(o, "%d", &offset); err == nil && offset >= 0 {
+			// offset is valid
+		}
+	}
+
+	resourceType := r.URL.Query().Get("resource_type")
+	tenantID := r.URL.Query().Get("tenant_id")
+
+	query := `
+		SELECT id, resource_type, resource_id, tenant_id, from_state, to_state, actor, reason, created_at
+		FROM lifecycle_events
+		WHERE 1=1
+	`
+	args := []interface{}{}
+	argCount := 0
+
+	if resourceType != "" {
+		argCount++
+		query += fmt.Sprintf(` AND resource_type = $%d`, argCount)
+		args = append(args, resourceType)
+	}
+
+	if tenantID != "" {
+		argCount++
+		query += fmt.Sprintf(` AND tenant_id = $%d`, argCount)
+		args = append(args, tenantID)
+	}
+
+	query += ` ORDER BY created_at DESC LIMIT ` + fmt.Sprintf("%d", limit) + ` OFFSET ` + fmt.Sprintf("%d", offset)
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Query failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type AuditEvent struct {
+		ID           string    `json:"id"`
+		ResourceType string    `json:"resource_type"`
+		ResourceID   string    `json:"resource_id"`
+		TenantID     string    `json:"tenant_id"`
+		FromState    *string   `json:"from_state"`
+		ToState      string    `json:"to_state"`
+		Actor        string    `json:"actor"`
+		Reason       *string   `json:"reason"`
+		CreatedAt    time.Time `json:"created_at"`
+	}
+
+	var events []AuditEvent
+	for rows.Next() {
+		var e AuditEvent
+		if err := rows.Scan(&e.ID, &e.ResourceType, &e.ResourceID, &e.TenantID, &e.FromState, &e.ToState, &e.Actor, &e.Reason, &e.CreatedAt); err != nil {
+			http.Error(w, fmt.Sprintf("Scan failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		events = append(events, e)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"events": events,
+		"limit":  limit,
+		"offset": offset,
+		"count":  len(events),
+	})
+}
+
 func readBody(r io.ReadCloser) string {
 	defer r.Close()
 	body, _ := io.ReadAll(r)

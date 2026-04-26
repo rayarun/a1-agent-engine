@@ -140,4 +140,61 @@ export const adminApi = {
     if (!response.ok) throw new Error("Failed to update system agent");
     return response.json();
   },
+
+  async listExecutions(params?: { limit?: number; tenant_id?: string; status?: string }): Promise<any> {
+    const query = new URLSearchParams();
+    if (params?.limit) query.append("limit", params.limit.toString());
+    if (params?.tenant_id) query.append("tenant_id", params.tenant_id);
+    if (params?.status) query.append("status", params.status);
+
+    const url = `/api/v1/admin/executions${query.toString() ? `?${query}` : ""}`;
+    const response = await request("GET", url);
+    if (!response.ok) throw new Error("Failed to fetch executions");
+    return response.json();
+  },
+
+  async getExecution(sessionId: string): Promise<any> {
+    const response = await request("GET", `/api/v1/admin/executions/${sessionId}`);
+    if (!response.ok) throw new Error("Failed to fetch execution");
+    return response.json();
+  },
+
+  async getExecutionEvents(sessionId: string): Promise<any> {
+    const response = await request("GET", `/api/v1/admin/executions/${sessionId}/events`);
+    if (!response.ok) throw new Error("Failed to fetch execution events");
+    return response.json();
+  },
+
+  async getCostSummary(params?: { period?: string }): Promise<any> {
+    const query = new URLSearchParams();
+    if (params?.period) query.append("period", params.period);
+
+    const url = `/api/v1/admin/cost${query.toString() ? `?${query}` : ""}`;
+    const response = await request("GET", url);
+    if (!response.ok) throw new Error("Failed to fetch cost data");
+    return response.json();
+  },
+
+  async getCostByTenant(tenantId: string, params?: { period?: string }): Promise<any> {
+    const query = new URLSearchParams();
+    if (params?.period) query.append("period", params.period);
+
+    const url = `/api/v1/admin/cost/${tenantId}${query.toString() ? `?${query}` : ""}`;
+    const response = await request("GET", url);
+    if (!response.ok) throw new Error("Failed to fetch tenant cost data");
+    return response.json();
+  },
+
+  async getAuditLog(params?: { limit?: number; offset?: number; resource_type?: string; tenant_id?: string }): Promise<any> {
+    const query = new URLSearchParams();
+    if (params?.limit) query.append("limit", params.limit.toString());
+    if (params?.offset) query.append("offset", params.offset.toString());
+    if (params?.resource_type) query.append("resource_type", params.resource_type);
+    if (params?.tenant_id) query.append("tenant_id", params.tenant_id);
+
+    const url = `/api/v1/admin/audit${query.toString() ? `?${query}` : ""}`;
+    const response = await request("GET", url);
+    if (!response.ok) throw new Error("Failed to fetch audit log");
+    return response.json();
+  },
 };

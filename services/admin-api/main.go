@@ -53,6 +53,18 @@ func main() {
 	mux.Handle("GET /api/v1/admin/system-agents/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetSystemAgent)))
 	mux.Handle("PUT /api/v1/admin/system-agents/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleUpdateSystemAgent)))
 
+	// Execution Visualizer
+	mux.Handle("GET /api/v1/admin/executions", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleListExecutions)))
+	mux.Handle("GET /api/v1/admin/executions/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetExecution)))
+	mux.Handle("GET /api/v1/admin/executions/{id}/events", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetExecutionEvents)))
+
+	// Cost Tracking
+	mux.Handle("GET /api/v1/admin/cost", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetCostSummary)))
+	mux.Handle("GET /api/v1/admin/cost/{tenant_id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetCostByTenant)))
+
+	// Audit Log
+	mux.Handle("GET /api/v1/admin/audit", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetAuditLog)))
+
 	log.Printf("Starting Admin API on :8089 (Admin Key: %s...)", adminAPIKey[:10])
 	if err := http.ListenAndServe(":8089", withCORS(mux)); err != nil {
 		log.Fatalf("Server failed: %v", err)
