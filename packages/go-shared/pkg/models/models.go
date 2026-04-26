@@ -316,3 +316,65 @@ type LLMResponse struct {
 	Content string `json:"content"`
 	Model   string `json:"model"`
 }
+
+// --- Admin Console Models ---
+
+// TenantStatus represents the operational status of a tenant.
+type TenantStatus string
+
+const (
+	TenantStatusActive    TenantStatus = "active"
+	TenantStatusSuspended TenantStatus = "suspended"
+)
+
+// TenantSettings stores quota and configuration for a tenant.
+type TenantSettings struct {
+	TenantID                string        `json:"tenant_id"`
+	DisplayName             string        `json:"display_name"`
+	Status                  TenantStatus  `json:"status"`
+	MaxConcurrentWorkflows  int           `json:"max_concurrent_workflows"`
+	TokenBudgetMonthly      int64         `json:"token_budget_monthly"`
+	CreatedAt               time.Time     `json:"created_at"`
+	UpdatedAt               time.Time     `json:"updated_at"`
+}
+
+// TenantSettingsUpdate is used to update tenant settings.
+type TenantSettingsUpdate struct {
+	DisplayName            *string       `json:"display_name,omitempty"`
+	Status                 *TenantStatus `json:"status,omitempty"`
+	MaxConcurrentWorkflows *int          `json:"max_concurrent_workflows,omitempty"`
+	TokenBudgetMonthly     *int64        `json:"token_budget_monthly,omitempty"`
+}
+
+// ModelAccess controls which models a tenant can use and per-model quotas.
+type ModelAccess struct {
+	TenantID        string     `json:"tenant_id"`
+	ModelID         string     `json:"model_id"`
+	Enabled         bool       `json:"enabled"`
+	DailyTokenLimit *int64     `json:"daily_token_limit,omitempty"` // nil = no limit
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+// PlatformConfig stores platform-wide settings (e.g., LLM proxy URL, API keys).
+type PlatformConfig struct {
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// AdminAuthResponse is returned after successful admin authentication.
+type AdminAuthResponse struct {
+	Valid bool   `json:"valid"`
+	Role  string `json:"role"` // "admin" for V1
+}
+
+// TenantStats provides aggregated statistics for a tenant.
+type TenantStats struct {
+	TenantID      string      `json:"tenant_id"`
+	AgentCount    int         `json:"agent_count"`
+	SkillCount    int         `json:"skill_count"`
+	ToolCount     int         `json:"tool_count"`
+	MonthlyCost   float64     `json:"monthly_cost"`
+	Settings      *TenantSettings `json:"settings,omitempty"`
+}

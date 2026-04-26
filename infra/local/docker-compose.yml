@@ -279,6 +279,25 @@ services:
       - agent-net
 
   # ------------------------------------
+  # Admin API  (port 8089)
+  # ------------------------------------
+  admin-api:
+    build:
+      context: ../../
+      dockerfile: services/admin-api/Dockerfile
+    container_name: admin-api
+    ports:
+      - "8089:8089"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
+      - ADMIN_API_KEY=dev-admin-key
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - agent-net
+
+  # ------------------------------------
   # Agent Studio  (port 3000)
   # ------------------------------------
   agent-studio:
