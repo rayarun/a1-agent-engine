@@ -8,6 +8,7 @@ import (
 
 	"github.com/agent-platform/admin-api/pkg/service"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.temporal.io/sdk/client"
 )
 
 func main() {
@@ -28,9 +29,21 @@ func main() {
 		adminAPIKey = "dev-admin-key"
 	}
 
+	// Temporal client setup
+	temporalHostPort := os.Getenv("TEMPORAL_HOSTPORT")
+	if temporalHostPort == "" {
+		temporalHostPort = "localhost:7233"
+	}
+	temporalClient, err := client.Dial(client.Options{HostPort: temporalHostPort})
+	if err != nil {
+		log.Fatalf("Failed to connect to Temporal: %v", err)
+	}
+	defer temporalClient.Close()
+
 	handler := &service.AdminHandler{
-		DB:         dbPool,
-		AdminKey:   adminAPIKey,
+		DB:           dbPool,
+		AdminKey:     adminAPIKey,
+		TemporalClient: temporalClient,
 	}
 
 	mux := http.NewServeMux()

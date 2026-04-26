@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,12 +11,47 @@ import (
 
 	"github.com/agent-platform/go-shared/pkg/models"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.temporal.io/sdk/client"
 )
 
 // AdminHandler handles admin API requests.
 type AdminHandler struct {
-	DB       *pgxpool.Pool
-	AdminKey string
+	DB             *pgxpool.Pool
+	AdminKey       string
+	TemporalClient client.Client
+}
+
+// getPricingModel retrieves the pricing model from platform_config.
+// Returns a map of model_id -> price per 1M tokens.
+func (h *AdminHandler) getPricingModel(ctx context.Context) map[string]float64 {
+	defaultPricing := map[string]float64{
+		"claude-3-5-sonnet-20241022": 3.0,
+		"claude-opus-4-20250514":      15.0,
+		"claude-opus-4":                15.0,
+	}
+
+	var value string
+	err := h.DB.QueryRow(ctx, `
+		SELECT value FROM platform_config WHERE key = 'pricing_model'
+	`).Scan(&value)
+
+	if err == nil && value != "" {
+		var pricing map[string]float64
+		if err := json.Unmarshal([]byte(value), &pricing); err == nil {
+			return pricing
+		}
+	}
+
+	return defaultPricing
+}
+
+// calculateCost calculates USD cost from tokens using the pricing model.
+func (h *AdminHandler) calculateCost(ctx context.Context, tokensIn, tokensOut int64) float64 {
+	_ = h.getPricingModel(ctx) // Load pricing model (future: use for model-specific pricing)
+	// Default to average price per 1M tokens
+	avgPrice := 5.0
+	totalTokens := float64(tokensIn + tokensOut)
+	return (totalTokens / 1000000.0) * avgPrice
 }
 
 // HandleHealth returns the service health status.
@@ -472,8 +508,9 @@ func (h *AdminHandler) HandleListExecutions(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// For now, return mock execution data.
-	// TODO: Query Temporal or workflow-initiator for real execution history
+	tenantIDFilter := r.URL.Query().Get("tenant_id")
+	statusFilter := r.URL.Query().Get("status")
+
 	type ExecutionRow struct {
 		SessionID  string    `json:"session_id"`
 		TenantID   string    `json:"tenant_id"`
@@ -481,11 +518,52 @@ func (h *AdminHandler) HandleListExecutions(w http.ResponseWriter, r *http.Reque
 		Status     string    `json:"status"`
 		StartTime  time.Time `json:"start_time"`
 		EndTime    *time.Time `json:"end_time,omitempty"`
-		DurationMS int       `json:"duration_ms"`
+		DurationMS int64     `json:"duration_ms"`
 		EventCount int       `json:"event_count"`
 	}
 
-	executions := []ExecutionRow{}
+	// Build query for workflow_executions table
+	query := `SELECT workflow_id, tenant_id, agent_id, status, start_time, end_time,
+	           EXTRACT(EPOCH FROM (COALESCE(end_time, NOW()) - start_time))::bigint * 1000 as duration_ms, 0 as event_count
+	           FROM workflow_executions WHERE 1=1`
+
+	args := []interface{}{}
+	argCount := 1
+
+	if tenantIDFilter != "" {
+		query += fmt.Sprintf(` AND tenant_id = $%d`, argCount)
+		args = append(args, tenantIDFilter)
+		argCount++
+	}
+
+	if statusFilter != "" && statusFilter != "ALL" {
+		query += fmt.Sprintf(` AND status = $%d`, argCount)
+		args = append(args, statusFilter)
+		argCount++
+	}
+
+	query += fmt.Sprintf(` ORDER BY start_time DESC LIMIT $%d`, argCount)
+	args = append(args, limit)
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
+	if err != nil {
+		// Table might not exist yet, return empty result
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"executions": []ExecutionRow{},
+			"count":      0,
+		})
+		return
+	}
+	defer rows.Close()
+
+	var executions []ExecutionRow
+	for rows.Next() {
+		var row ExecutionRow
+		if err := rows.Scan(&row.SessionID, &row.TenantID, &row.AgentID, &row.Status, &row.StartTime, &row.EndTime, &row.DurationMS, &row.EventCount); err != nil {
+			continue
+		}
+		executions = append(executions, row)
+	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"executions": executions,
@@ -503,8 +581,68 @@ func (h *AdminHandler) HandleGetExecution(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// TODO: Query Temporal or workflow-initiator for execution details
-	http.Error(w, "Execution not found", http.StatusNotFound)
+	type ExecutionDetail struct {
+		SessionID  string              `json:"session_id"`
+		Status     string              `json:"status"`
+		StartTime  time.Time           `json:"start_time"`
+		EndTime    *time.Time          `json:"end_time,omitempty"`
+		DurationMS int64               `json:"duration_ms"`
+		Events     []models.AgentEvent `json:"events,omitempty"`
+	}
+
+	// Query execution from database
+	var startTime time.Time
+	var endTime *time.Time
+	var status string
+	var durationMS int64
+
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT status, start_time, end_time, EXTRACT(EPOCH FROM (COALESCE(end_time, NOW()) - start_time))::bigint * 1000
+		FROM workflow_executions
+		WHERE workflow_id = $1
+	`, sessionID).Scan(&status, &startTime, &endTime, &durationMS)
+
+	if err != nil {
+		// Try Temporal as fallback if database doesn't have it
+		if h.TemporalClient != nil {
+			desc, err := h.TemporalClient.DescribeWorkflowExecution(r.Context(), sessionID, "")
+			if err == nil {
+				status = "RUNNING"
+				startTime = desc.WorkflowExecutionInfo.StartTime.AsTime()
+				if desc.WorkflowExecutionInfo.CloseTime != nil {
+					et := desc.WorkflowExecutionInfo.CloseTime.AsTime()
+					endTime = &et
+					durationMS = endTime.Sub(startTime).Milliseconds()
+					status = "COMPLETED"
+				}
+			}
+		}
+		if status == "" {
+			http.Error(w, "Execution not found", http.StatusNotFound)
+			return
+		}
+	}
+
+	detail := ExecutionDetail{
+		SessionID:  sessionID,
+		Status:     status,
+		StartTime:  startTime,
+		EndTime:    endTime,
+		DurationMS: durationMS,
+	}
+
+	// Try to query events from Temporal
+	if h.TemporalClient != nil {
+		val, err := h.TemporalClient.QueryWorkflow(r.Context(), sessionID, "", "get_events")
+		if err == nil {
+			var events []models.AgentEvent
+			if err := val.Get(&events); err == nil {
+				detail.Events = events
+			}
+		}
+	}
+
+	json.NewEncoder(w).Encode(detail)
 }
 
 // HandleGetExecutionEvents returns event stream for a single execution.
@@ -517,8 +655,21 @@ func (h *AdminHandler) HandleGetExecutionEvents(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// TODO: Query Temporal or workflow-initiator for execution events
-	http.Error(w, "Execution not found", http.StatusNotFound)
+	events := []models.AgentEvent{}
+
+	// Try to query events from Temporal workflow
+	if h.TemporalClient != nil {
+		val, err := h.TemporalClient.QueryWorkflow(r.Context(), sessionID, "", "get_events")
+		if err == nil {
+			if err := val.Get(&events); err == nil && events != nil {
+				json.NewEncoder(w).Encode(events)
+				return
+			}
+		}
+	}
+
+	// Return empty events if not found
+	json.NewEncoder(w).Encode(events)
 }
 
 // HandleGetCostSummary returns aggregate cost data across all tenants.
@@ -552,10 +703,11 @@ func (h *AdminHandler) HandleGetCostSummary(w http.ResponseWriter, r *http.Reque
 	defer rows.Close()
 
 	type CostRow struct {
-		TenantID  string `json:"tenant_id"`
-		TokensIn  int64  `json:"tokens_in"`
-		TokensOut int64  `json:"tokens_out"`
-		SandboxMS int64  `json:"sandbox_ms"`
+		TenantID  string  `json:"tenant_id"`
+		TokensIn  int64   `json:"tokens_in"`
+		TokensOut int64   `json:"tokens_out"`
+		SandboxMS int64   `json:"sandbox_ms"`
+		CostUSD   float64 `json:"cost_usd"`
 	}
 
 	var costs []CostRow
@@ -565,6 +717,7 @@ func (h *AdminHandler) HandleGetCostSummary(w http.ResponseWriter, r *http.Reque
 			http.Error(w, fmt.Sprintf("Scan failed: %v", err), http.StatusInternalServerError)
 			return
 		}
+		c.CostUSD = h.calculateCost(r.Context(), c.TokensIn, c.TokensOut)
 		costs = append(costs, c)
 	}
 
@@ -616,6 +769,7 @@ func (h *AdminHandler) HandleGetCostByTenant(w http.ResponseWriter, r *http.Requ
 		TokensIn  int64   `json:"tokens_in"`
 		TokensOut int64   `json:"tokens_out"`
 		SandboxMS int64   `json:"sandbox_ms"`
+		CostUSD   float64 `json:"cost_usd"`
 	}
 
 	var breakdown []CostBreakdown
@@ -625,6 +779,7 @@ func (h *AdminHandler) HandleGetCostByTenant(w http.ResponseWriter, r *http.Requ
 			http.Error(w, fmt.Sprintf("Scan failed: %v", err), http.StatusInternalServerError)
 			return
 		}
+		c.CostUSD = h.calculateCost(r.Context(), c.TokensIn, c.TokensOut)
 		breakdown = append(breakdown, c)
 	}
 

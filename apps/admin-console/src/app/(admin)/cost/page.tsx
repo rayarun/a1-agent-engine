@@ -28,6 +28,7 @@ export default function CostPage() {
 
   const summaryStats = useMemo(() => {
     const totalIn = costs.reduce((sum: number, c: any) => sum + (c.tokens_in || 0), 0);
+    const totalCost = costs.reduce((sum: number, c: any) => sum + (c.cost_usd || 0), 0);
     const totalOut = costs.reduce((sum: number, c: any) => sum + (c.tokens_out || 0), 0);
     const total = totalIn + totalOut;
     const mostExpensive = costs.length > 0 ? costs[0] : null;
@@ -104,7 +105,7 @@ export default function CostPage() {
       ) : (
         <>
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
             <div className="bg-card border border-border rounded-lg p-6">
               <div className="text-sm text-muted-foreground">Total Tokens</div>
               <div className="text-3xl font-bold mt-2">{formatNumber(summaryStats.totalTokens)}</div>
@@ -128,6 +129,12 @@ export default function CostPage() {
             </div>
 
             <div className="bg-card border border-border rounded-lg p-6">
+              <div className="text-sm text-muted-foreground">Total Cost</div>
+              <div className="text-3xl font-bold mt-2">${summaryStats.totalCostUSD.toFixed(2)}</div>
+              <div className="text-xs text-muted-foreground mt-2">USD</div>
+            </div>
+
+            <div className="bg-card border border-border rounded-lg p-6">
               <div className="text-sm text-muted-foreground">Tenants</div>
               <div className="text-3xl font-bold mt-2">{costs.length}</div>
               <div className="text-xs text-muted-foreground mt-2">Active in period</div>
@@ -147,6 +154,7 @@ export default function CostPage() {
                       <th className="text-right py-3 px-4 font-medium">Tokens In</th>
                       <th className="text-right py-3 px-4 font-medium">Tokens Out</th>
                       <th className="text-right py-3 px-4 font-medium">Sandbox (ms)</th>
+                      <th className="text-right py-3 px-4 font-medium">Cost (USD)</th>
                       <th className="text-center py-3 px-4 font-medium">Actions</th>
                     </tr>
                   </thead>
@@ -157,6 +165,7 @@ export default function CostPage() {
                         <td className="py-3 px-4 text-right">{formatNumber(cost.tokens_in)}</td>
                         <td className="py-3 px-4 text-right">{formatNumber(cost.tokens_out)}</td>
                         <td className="py-3 px-4 text-right">{cost.sandbox_ms.toLocaleString()}</td>
+                        <td className="py-3 px-4 text-right">${(cost.cost_usd || 0).toFixed(2)}</td>
                         <td className="py-3 px-4 text-center">
                           <button
                             onClick={() => setSelectedTenant(cost.tenant_id === selectedTenant ? null : cost.tenant_id)}
@@ -189,6 +198,7 @@ export default function CostPage() {
                       <th className="text-right py-3 px-4 font-medium">Tokens In</th>
                       <th className="text-right py-3 px-4 font-medium">Tokens Out</th>
                       <th className="text-right py-3 px-4 font-medium">Sandbox (ms)</th>
+                      <th className="text-right py-3 px-4 font-medium">Cost (USD)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -199,6 +209,7 @@ export default function CostPage() {
                         <td className="py-3 px-4 text-right">{formatNumber(item.tokens_in)}</td>
                         <td className="py-3 px-4 text-right">{formatNumber(item.tokens_out)}</td>
                         <td className="py-3 px-4 text-right">{item.sandbox_ms.toLocaleString()}</td>
+                        <td className="py-3 px-4 text-right">${(item.cost_usd || 0).toFixed(2)}</td>
                       </tr>
                     ))}
                   </tbody>

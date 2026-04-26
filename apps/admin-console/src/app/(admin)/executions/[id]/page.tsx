@@ -1,253 +1,207 @@
 "use client";
 
-import { useState } from "react";
-import { useParams } from "next/navigation";
-import { ChevronDown, ChevronUp, Copy } from "lucide-react";
+import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Loader2, AlertCircle } from "lucide-react";
+import { adminApi } from "@/lib/api";
 
-export default function ExecutionDetailPage() {
-  const params = useParams();
-  const sessionId = params.id as string;
-  const [expandedEvents, setExpandedEvents] = useState<Set<number>>(new Set());
+export default function ExecutionDetailPage({ params }: { params: { id: string } }) {
+  const sessionId = params.id;
+  const [pollingInterval, setPollingInterval] = useState<number | false>(1000);
 
-  const execution = {
-    session_id: sessionId,
-    tenant_id: "default-tenant",
-    agent_id: "manifest-assistant",
-    status: "RUNNING",
-    start_time: "2026-04-26T14:35:00Z",
-    duration: 2100,
+  const { data: execution, isLoading, isError, error } = useQuery({
+    queryKey: ["execution", sessionId],
+    queryFn: () => adminApi.getExecution(sessionId),
+    refetchInterval: pollingInterval,
+  });
+
+  useEffect(() => {
+    if (execution?.status === "COMPLETED" || execution?.status === "FAILED" || execution?.status === "CANCELLED") {
+      setPollingInterval(false);
+    }
+  }, [execution?.status]);
+
+  const statusColors: Record<string, string> = {
+    RUNNING: "bg-blue-500/15 text-blue-400 border border-blue-500/30",
+    COMPLETED: "bg-green-500/15 text-green-400 border border-green-500/30",
+    FAILED: "bg-red-500/15 text-red-400 border border-red-500/30",
+    CANCELLED: "bg-gray-500/15 text-gray-400 border border-gray-500/30",
   };
 
-  const events = [
-    {
-      id: 1,
-      type: "thinking",
-      timestamp: "2026-04-26T14:35:00Z",
-      content:
-        "The user is asking me to analyze an agent manifest and suggest improvements for performance optimization.",
-    },
-    {
-      id: 2,
-      type: "tool_call",
-      timestamp: "2026-04-26T14:35:02Z",
-      tool: "retrieve_documents",
-      args: { query: "agent performance patterns", limit: 5 },
-    },
-    {
-      id: 3,
-      type: "tool_result",
-      timestamp: "2026-04-26T14:35:04Z",
-      tool: "retrieve_documents",
-      result: [
-        { title: "Prompt optimization guide", relevance: 0.92 },
-        { title: "Tool routing best practices", relevance: 0.87 },
-      ],
-    },
-    {
-      id: 4,
-      type: "thinking",
-      timestamp: "2026-04-26T14:35:05Z",
-      content:
-        "Based on the retrieved documents, I can now provide recommendations on optimizing the agent manifest for better performance.",
-    },
-    {
-      id: 5,
-      type: "text",
-      timestamp: "2026-04-26T14:35:06Z",
-      content:
-        "I've analyzed your agent manifest and identified several optimization opportunities:\n\n1. **Prompt Optimization**: Reduce system prompt verbosity by 30%\n2. **Tool Routing**: Consolidate similar tools into skill groups\n3. **Memory Usage**: Implement selective memory pruning for long sessions",
-    },
-  ];
+  const getStatusColor = (status: string) => statusColors[status] || statusColors.COMPLETED;
 
-  function toggleEvent(id: number) {
-    const newExpanded = new Set(expandedEvents);
-    if (newExpanded.has(id)) {
-      newExpanded.delete(id);
-    } else {
-      newExpanded.add(id);
+  const getEventTypeIcon = (type: string) => {
+    switch (type) {
+      case "thinking":
+        return "💭";
+      case "tool_call":
+        return "🔧";
+      case "tool_result":
+        return "✅";
+      case "text":
+        return "💬";
+      case "done":
+        return "🏁";
+      case "error":
+        return "❌";
+      default:
+        return "•";
     }
-    setExpandedEvents(newExpanded);
-  }
+  };
 
-  function copyToClipboard(text: string) {
-    navigator.clipboard.writeText(text);
-  }
+  const events = execution?.events || [];
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Execution Trace</h1>
-          <p className="text-muted-foreground mt-1 font-mono text-sm">{sessionId}</p>
-        </div>
-        <div className="text-right">
-          <span
-            className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
-              execution.status === "RUNNING"
-                ? "bg-blue-500/15 text-blue-400"
-                : execution.status === "COMPLETED"
-                ? "bg-green-500/15 text-green-400"
-                : "bg-red-500/15 text-red-400"
-            }`}
-          >
-            {execution.status}
-          </span>
-        </div>
+      <div>
+        <h1 className="text-3xl font-bold">Execution Trace</h1>
+        <p className="text-muted-foreground mt-1">{sessionId}</p>
       </div>
 
-      {/* Header Info */}
-      <div className="bg-card border border-border rounded-lg p-6">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">Tenant</p>
-            <p className="text-sm font-mono">{execution.tenant_id}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">Agent</p>
-            <p className="text-sm font-mono">{execution.agent_id}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">Started</p>
-            <p className="text-sm">
-              {new Date(execution.start_time).toLocaleString()}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">Duration</p>
-            <p className="text-sm">
-              {execution.duration < 60
-                ? `${execution.duration}s`
-                : `${Math.floor(execution.duration / 60)}m ${execution.duration % 60}s`}
-            </p>
-          </div>
+      {isError && (
+        <div className="flex items-center gap-2 p-4 bg-destructive/10 text-destructive rounded-md">
+          <AlertCircle className="h-4 w-4" />
+          <span>{error instanceof Error ? error.message : "Failed to load execution"}</span>
         </div>
+      )}
 
-        {execution.status === "RUNNING" && (
-          <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
-            <div className="h-2 w-2 bg-blue-500 rounded-full animate-pulse"></div>
-            <span className="text-xs text-blue-400">Live stream active</span>
-          </div>
-        )}
-      </div>
-
-      {/* Event Timeline */}
-      <div className="space-y-2">
-        <h2 className="text-lg font-semibold mb-4">Event Timeline</h2>
-
-        {events.map((event) => (
-          <div key={event.id} className="bg-card border border-border rounded-lg overflow-hidden">
-            <button
-              onClick={() => toggleEvent(event.id)}
-              className="w-full p-4 flex items-start justify-between hover:bg-muted/30 transition-colors"
-            >
-              <div className="flex items-start gap-3 flex-1">
-                <div
-                  className={`mt-1 flex-shrink-0 h-2 w-2 rounded-full ${
-                    event.type === "thinking"
-                      ? "bg-yellow-500"
-                      : event.type === "tool_call"
-                      ? "bg-purple-500"
-                      : event.type === "tool_result"
-                      ? "bg-blue-500"
-                      : "bg-green-500"
-                  }`}
-                ></div>
-
-                <div className="text-left flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-muted-foreground">
-                      {new Date(event.timestamp).toLocaleTimeString()}
-                    </span>
-                    <span className="text-xs font-medium capitalize px-1.5 py-0.5 bg-muted rounded">
-                      {event.type === "tool_call" ? `${event.tool}` : event.type}
-                    </span>
-                  </div>
-
-                  <div className="text-sm text-muted-foreground mt-1 line-clamp-2">
-                    {event.type === "thinking" && event.content}
-                    {event.type === "tool_call" &&
-                      `Call ${event.tool} with ${event.args ? Object.keys(event.args).length : 0} args`}
-                    {event.type === "tool_result" &&
-                      `Result: ${JSON.stringify(event.result).substring(0, 80)}...`}
-                    {event.type === "text" && event.content ? event.content.split("\n")[0] : ""}
-                  </div>
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : execution ? (
+        <>
+          {/* Execution Header */}
+          <div className="bg-card border border-border rounded-lg p-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <div className="text-sm text-muted-foreground">Status</div>
+                <div className={`text-lg font-bold mt-2 inline-block px-3 py-1 rounded ${getStatusColor(execution.status)}`}>
+                  {execution.status}
                 </div>
               </div>
 
-              <div className="ml-2 flex-shrink-0">
-                {expandedEvents.has(event.id) ? (
-                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                )}
+              <div>
+                <div className="text-sm text-muted-foreground">Started</div>
+                <div className="text-sm font-mono mt-2">{new Date(execution.start_time).toLocaleString()}</div>
               </div>
-            </button>
 
-            {expandedEvents.has(event.id) && (
-              <div className="p-4 border-t border-border bg-muted/30 space-y-2">
-                {event.type === "thinking" && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-2">Thinking</p>
-                    <div className="bg-background border border-border rounded p-3 text-sm whitespace-pre-wrap font-mono max-h-64 overflow-y-auto">
-                      {event.content}
-                    </div>
-                  </div>
-                )}
-
-                {event.type === "tool_call" && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-2">
-                      Tool: {event.tool}
-                    </p>
-                    <div className="bg-background border border-border rounded p-3 text-sm font-mono max-h-64 overflow-y-auto">
-                      {JSON.stringify(event.args, null, 2)}
-                    </div>
-                    <button
-                      onClick={() => copyToClipboard(JSON.stringify(event.args, null, 2))}
-                      className="mt-2 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                    >
-                      <Copy className="h-3 w-3" />
-                      Copy
-                    </button>
-                  </div>
-                )}
-
-                {event.type === "tool_result" && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-2">Result</p>
-                    <div className="bg-background border border-border rounded p-3 text-sm font-mono max-h-64 overflow-y-auto">
-                      {JSON.stringify(event.result, null, 2)}
-                    </div>
-                    <button
-                      onClick={() => copyToClipboard(JSON.stringify(event.result, null, 2))}
-                      className="mt-2 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                    >
-                      <Copy className="h-3 w-3" />
-                      Copy
-                    </button>
-                  </div>
-                )}
-
-                {event.type === "text" && (
-                  <div>
-                    <p className="text-xs font-medium text-muted-foreground mb-2">Response</p>
-                    <div className="bg-background border border-border rounded p-3 text-sm whitespace-pre-wrap max-h-64 overflow-y-auto">
-                      {event.content}
-                    </div>
-                    <button
-                      onClick={() => event.content && copyToClipboard(event.content)}
-                      className="mt-2 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                    >
-                      <Copy className="h-3 w-3" />
-                      Copy
-                    </button>
-                  </div>
-                )}
+              <div>
+                <div className="text-sm text-muted-foreground">Duration</div>
+                <div className="text-sm font-mono mt-2">{formatDuration(execution.duration_ms)}</div>
               </div>
-            )}
+
+              <div>
+                <div className="text-sm text-muted-foreground">Events</div>
+                <div className="text-lg font-bold mt-2">{events.length}</div>
+              </div>
+            </div>
           </div>
-        ))}
-      </div>
+
+          {/* Horizontal Timeline */}
+          {events.length > 0 ? (
+            <div className="bg-card border border-border rounded-lg p-6">
+              <h2 className="text-lg font-semibold mb-6">Event Timeline</h2>
+
+              <div className="overflow-x-auto pb-4">
+                <div className="flex gap-2 min-w-max">
+                  {events.map((event: any, idx: number) => (
+                    <div key={idx} className="flex flex-col items-center">
+                      {/* Event Node */}
+                      <div className={`
+                        w-12 h-12 rounded-full flex items-center justify-center text-xl
+                        ${
+                          event.type === "thinking"
+                            ? "bg-purple-500/20 border border-purple-500/50"
+                            : event.type === "tool_call"
+                            ? "bg-blue-500/20 border border-blue-500/50"
+                            : event.type === "tool_result"
+                            ? "bg-green-500/20 border border-green-500/50"
+                            : event.type === "text"
+                            ? "bg-cyan-500/20 border border-cyan-500/50"
+                            : event.type === "done"
+                            ? "bg-green-500/20 border border-green-500/50"
+                            : "bg-red-500/20 border border-red-500/50"
+                        }
+                      `}>
+                        {getEventTypeIcon(event.type)}
+                      </div>
+
+                      {/* Event Connector */}
+                      {idx < events.length - 1 && (
+                        <div className="w-1 h-8 bg-border/50 mx-auto mt-1" />
+                      )}
+
+                      {/* Event Label */}
+                      <div className="text-xs font-medium mt-2 text-center">
+                        {event.type === "tool_call" ? event.name : event.type}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Event Details */}
+              <div className="mt-8 space-y-4 border-t border-border pt-6">
+                {events.map((event: any, idx: number) => (
+                  <div key={idx} className="bg-muted/30 rounded-lg p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="text-xl mt-1">{getEventTypeIcon(event.type)}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-sm">
+                          {event.type === "tool_call" ? `Tool: ${event.name}` : event.type.charAt(0).toUpperCase() + event.type.slice(1)}
+                        </div>
+
+                        {event.type === "thinking" && (
+                          <div className="text-sm text-muted-foreground mt-2 break-words">{event.content}</div>
+                        )}
+
+                        {event.type === "tool_call" && event.args && (
+                          <div className="text-xs bg-background rounded p-2 mt-2 overflow-auto max-h-32 font-mono">
+                            <div className="text-muted-foreground mb-1">Arguments:</div>
+                            <pre className="text-xs whitespace-pre-wrap break-words">{event.args}</pre>
+                          </div>
+                        )}
+
+                        {event.type === "tool_result" && event.result && (
+                          <div className="text-xs bg-background rounded p-2 mt-2 overflow-auto max-h-32 font-mono">
+                            <div className="text-muted-foreground mb-1">Result:</div>
+                            <pre className="text-xs whitespace-pre-wrap break-words">{event.result}</pre>
+                          </div>
+                        )}
+
+                        {event.type === "text" && (
+                          <div className="text-sm text-muted-foreground mt-2 break-words">{event.content}</div>
+                        )}
+
+                        {event.type === "error" && (
+                          <div className="text-sm text-red-400 mt-2 break-words">{event.content}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-card border border-border rounded-lg p-12 text-center text-muted-foreground">
+              <p>No events yet</p>
+              {execution.status === "RUNNING" && (
+                <p className="text-xs mt-2">Polling for updates every 1 second...</p>
+              )}
+            </div>
+          )}
+        </>
+      ) : null}
     </div>
   );
+}
+
+function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  if (minutes > 0) {
+    return `${minutes}m ${seconds % 60}s`;
+  }
+  return `${seconds}s`;
 }
