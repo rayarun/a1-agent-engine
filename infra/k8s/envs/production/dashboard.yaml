@@ -1,0 +1,40 @@
+image:
+  tag: "placeholder"
+
+replicaCount: 2
+
+config:
+  API_GATEWAY_URL: "http://api-gateway:8080"
+  LOG_LEVEL: "info"
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "1Gi"
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    kubernetes.io/ingress.class: "alb"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:ACCOUNT_PROD:certificate/YYYY"
+  hosts:
+    - host: dashboard.a1-agent-engine.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: dashboard-tls
+      hosts:
+        - dashboard.a1-agent-engine.example.com

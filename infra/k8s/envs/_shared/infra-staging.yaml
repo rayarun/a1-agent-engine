@@ -1,0 +1,40 @@
+# Shared infrastructure endpoints for staging environment.
+# This is a reference document. Service overlays copy relevant values from here.
+# Not a Helm values file itself.
+
+# AWS account and region (used to construct ECR image repository URLs)
+aws:
+  account: "CHANGE_ME_AWS_ACCOUNT"
+  region: "us-east-1"
+
+# Managed services: RDS, ElastiCache, Temporal Cloud or self-hosted
+postgres:
+  host: "staging-rds.xxxxxxxx.us-east-1.rds.amazonaws.com"
+  port: 5432
+  database: "agentplatform"
+  ssl_mode: "require"
+  # Credentials provisioned as K8s Secret "postgres-credentials"
+  credentials_secret: "postgres-credentials"
+  url_secret_key: "url"  # Secret key containing full DATABASE_URL
+
+redis:
+  host: "staging-redis.xxxxxx.0001.use1.cache.amazonaws.com"
+  port: 6379
+  # No auth for staging; prod should use AUTH
+
+temporal:
+  hostport: "temporal.staging.internal:7233"
+  # If using Temporal Cloud: "<namespace>.tmprl.cloud:7233"
+
+ingress:
+  domain: "staging.a1-agent-engine.internal"
+  scheme: "internal"  # VPC-only, not internet-facing
+  certificate_arn: "arn:aws:acm:us-east-1:ACCOUNT:certificate/XXXX"
+
+k8s:
+  namespace: "a1-staging"
+  cluster_name: "a1-staging-eks"
+
+# Node labels for special workloads
+node_labels:
+  sandbox: "a1/sandbox=true"  # For sandbox-manager DaemonSet

@@ -1,0 +1,26 @@
+image:
+  tag: "placeholder"
+
+replicaCount: 2
+
+config:
+  TEMPORAL_HOSTPORT: "prod.a1-agent-engine.tmprl.cloud:7233"
+  AGENT_REGISTRY_URL: "http://agent-registry:8088"
+  LOG_LEVEL: "info"
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60
+
+ingress:
+  enabled: false

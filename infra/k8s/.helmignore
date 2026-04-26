@@ -1,0 +1,45 @@
+# Helm ignore file (prevent unnecessary files in chart packaging)
+
+# Directories
+.git
+.github
+.gitignore
+.gitlab-ci.yml
+.gitattributes
+.bzr
+.bzrignore
+.hg
+.hgignore
+.svn
+
+# Build results
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/
+.idea/
+
+# Test files
+tests/
+test_*.yaml
+*_test.yaml
+
+# Documentation
+*.md
+README*
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.circleci/
+
+# Tmp and cache
+tmp/
+*.tmp
+.cache/
+
+# VCS
+.git/
+.gitignore

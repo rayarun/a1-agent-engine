@@ -1,0 +1,69 @@
+image:
+  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/sub-agent-registry
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+containerPort: 8084
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 8084
+
+config:
+  LOG_LEVEL: "info"
+
+secretRefs:
+  - envVarName: DATABASE_URL
+    secretName: postgres-credentials
+    secretKey: url
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+  limits:
+    cpu: "200m"
+    memory: "256Mi"
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8084
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8084
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
+ingress:
+  enabled: false
+  className: "alb"
+  annotations: {}
+  hosts: []
+  tls: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+securityContext: {}
+containerSecurityContext: {}
+volumes: []
+volumeMounts: []

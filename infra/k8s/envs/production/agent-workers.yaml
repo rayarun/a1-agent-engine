@@ -1,0 +1,26 @@
+image:
+  tag: "placeholder"
+
+replicaCount: 4
+
+config:
+  TEMPORAL_HOSTPORT: "prod.a1-agent-engine.tmprl.cloud:7233"
+  TEMPORAL_TASK_QUEUE: "default-tenant-agent-queue"
+  LLM_GATEWAY_URL: "http://llm-gateway:8083/v1"
+  SANDBOX_MANAGER_URL: "http://sandbox-manager:8082/api/v1/execute"
+  SKILL_DISPATCHER_URL: "http://skill-dispatcher:8085"
+  LOG_LEVEL: "info"
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "256Mi"
+  limits:
+    cpu: "1000m"
+    memory: "1Gi"
+
+hpa:
+  enabled: false
+  # For production, consider enabling KEDA based on Temporal queue depth
+  # minReplicas: 4
+  # maxReplicas: 20

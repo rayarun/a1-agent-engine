@@ -1,0 +1,70 @@
+image:
+  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/agent-workers
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+containerPort: null
+
+service:
+  enabled: false
+
+config:
+  TEMPORAL_HOSTPORT: "temporal.default.svc.cluster.local:7233"
+  TEMPORAL_TASK_QUEUE: "default-tenant-agent-queue"
+  LLM_GATEWAY_URL: "http://llm-gateway:8083/v1"
+  SANDBOX_MANAGER_URL: "http://sandbox-manager:8082/api/v1/execute"
+  SKILL_DISPATCHER_URL: "http://skill-dispatcher:8085"
+  LOG_LEVEL: "info"
+
+secretRefs:
+  - envVarName: POSTGRES_URL
+    secretName: postgres-credentials
+    secretKey: url
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+readinessProbe:
+  exec:
+    command: ["python", "-c", "import temporalio"]
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+livenessProbe:
+  exec:
+    command: ["python", "-c", "import temporalio"]
+  initialDelaySeconds: 30
+  periodSeconds: 60
+
+hpa:
+  enabled: false
+
+ingress:
+  enabled: false
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+securityContext: {}
+containerSecurityContext: {}
+volumes: []
+volumeMounts: []
+
+# Note: For autoscaling based on Temporal task queue depth, enable KEDA:
+# keda:
+#   enabled: true
+#   minReplicas: 1
+#   maxReplicas: 10
+#   queueLength: 30

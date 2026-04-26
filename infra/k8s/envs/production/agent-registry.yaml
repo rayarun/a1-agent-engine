@@ -1,0 +1,24 @@
+image:
+  tag: "placeholder"
+
+replicaCount: 2
+
+config:
+  LOG_LEVEL: "info"
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 60
+
+ingress:
+  enabled: false

@@ -1,0 +1,70 @@
+image:
+  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/dashboard
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+containerPort: 8501
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 8501
+
+config:
+  API_GATEWAY_URL: "http://api-gateway:8080"
+  LOG_LEVEL: "info"
+
+secretRefs:
+  - envVarName: POSTGRES_URL
+    secretName: postgres-credentials
+    secretKey: url
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "300m"
+    memory: "512Mi"
+
+readinessProbe:
+  httpGet:
+    path: /_stcore/health
+    port: 8501
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /_stcore/health
+    port: 8501
+  initialDelaySeconds: 30
+  periodSeconds: 20
+
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
+ingress:
+  enabled: false
+  className: "alb"
+  annotations: {}
+  hosts: []
+  tls: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+securityContext: {}
+containerSecurityContext: {}
+volumes: []
+volumeMounts: []

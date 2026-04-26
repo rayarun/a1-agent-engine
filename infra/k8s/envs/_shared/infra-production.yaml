@@ -1,0 +1,39 @@
+# Shared infrastructure endpoints for production environment.
+# This is a reference document. Service overlays copy relevant values from here.
+# Not a Helm values file itself.
+
+# AWS account and region (different from staging)
+aws:
+  account: "CHANGE_ME_AWS_ACCOUNT_PROD"
+  region: "us-east-1"
+
+# Managed services: RDS, ElastiCache, Temporal Cloud
+postgres:
+  host: "prod-rds.xxxxxxxx.us-east-1.rds.amazonaws.com"
+  port: 5432
+  database: "agentplatform"
+  ssl_mode: "require"
+  credentials_secret: "postgres-credentials"
+  url_secret_key: "url"
+
+redis:
+  host: "prod-redis.xxxxxx.0001.use1.cache.amazonaws.com"
+  port: 6379
+  # Use AUTH with credentials from Secret
+
+temporal:
+  hostport: "prod.a1-agent-engine.tmprl.cloud:7233"
+  # Temporal Cloud endpoint
+
+ingress:
+  domain: "a1-agent-engine.example.com"
+  scheme: "internet-facing"  # Public
+  certificate_arn: "arn:aws:acm:us-east-1:ACCOUNT_PROD:certificate/YYYY"
+
+k8s:
+  namespace: "a1-production"
+  cluster_name: "a1-production-eks"
+
+# Node labels for special workloads
+node_labels:
+  sandbox: "a1/sandbox=true"

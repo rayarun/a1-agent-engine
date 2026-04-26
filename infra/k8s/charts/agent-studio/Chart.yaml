@@ -1,0 +1,10 @@
+apiVersion: v2
+name: agent-studio
+description: A1 Agent Engine - Agent Studio (Next.js Frontend, NEXT_PUBLIC_* baked at build time)
+type: application
+version: 0.1.0
+appVersion: "latest"
+dependencies:
+  - name: a1-lib
+    version: "0.1.0"
+    repository: "file://../../_lib"

@@ -1,0 +1,15 @@
+{{- define "lib.configmap" -}}
+{{- if .Values.config }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "lib.fullname" . }}-config
+  labels:
+    {{- include "lib.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.config }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}

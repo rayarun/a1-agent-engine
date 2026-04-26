@@ -1,0 +1,84 @@
+# NOTE: NEXT_PUBLIC_* environment variables are baked into the JavaScript bundle
+# at build time (next build) and CANNOT be changed at runtime. The image itself is
+# environment-specific. CI must build separate images for staging and production:
+#   agent-studio:<sha>-staging  (built with NEXT_PUBLIC_* for staging)
+#   agent-studio:<sha>-prod     (built with NEXT_PUBLIC_* for production)
+#
+# NEXT_PUBLIC_* build args used at image build time (for reference/documentation):
+#   NEXT_PUBLIC_API_GATEWAY_URL: https://api.staging.a1-agent-engine.internal
+#   NEXT_PUBLIC_TOOL_REGISTRY_URL: https://tool-registry.staging.a1-agent-engine.internal
+#   NEXT_PUBLIC_SKILL_CATALOG_URL: https://skill-catalog.staging.a1-agent-engine.internal
+#   NEXT_PUBLIC_AGENT_REGISTRY_URL: https://agent-registry.staging.a1-agent-engine.internal
+#   NEXT_PUBLIC_TENANT_ID: default-tenant
+#
+# Refer to CI/CD pipeline for how build args are injected for each environment.
+
+image:
+  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/agent-studio
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+containerPort: 3000
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 3000
+
+# Runtime environment variables (server-side only; safe in ConfigMap)
+config:
+  API_GATEWAY_URL: "http://api-gateway:8080"
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+
+secretRefs: []
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "300m"
+    memory: "512Mi"
+
+readinessProbe:
+  httpGet:
+    path: /
+    port: 3000
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /
+    port: 3000
+  initialDelaySeconds: 30
+  periodSeconds: 20
+
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
+ingress:
+  enabled: false
+  className: "alb"
+  annotations: {}
+  hosts: []
+  tls: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+securityContext: {}
+containerSecurityContext: {}
+volumes: []
+volumeMounts: []

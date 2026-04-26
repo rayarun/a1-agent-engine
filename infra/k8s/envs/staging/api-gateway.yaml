@@ -1,0 +1,33 @@
+image:
+  tag: "placeholder"  # CI overwrites via --set image.tag=<git-sha>
+
+replicaCount: 1
+
+config:
+  WORKFLOW_INITIATOR_URL: "http://workflow-initiator:8081"
+  LOG_LEVEL: "debug"
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+  limits:
+    cpu: "200m"
+    memory: "256Mi"
+
+hpa:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    kubernetes.io/ingress.class: "alb"
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:ACCOUNT:certificate/XXXX"
+  hosts:
+    - host: api.staging.a1-agent-engine.internal
+      paths:
+        - path: /
+          pathType: Prefix

@@ -1,0 +1,36 @@
+# Image tag MUST include -staging suffix: image.tag=<sha>-staging
+# CI builds this image with staging-specific NEXT_PUBLIC_* build args
+image:
+  tag: "placeholder-staging"
+
+replicaCount: 1
+
+config:
+  API_GATEWAY_URL: "http://api-gateway:8080"
+  NODE_ENV: "production"
+  LOG_LEVEL: "debug"
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "300m"
+    memory: "512Mi"
+
+hpa:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    kubernetes.io/ingress.class: "alb"
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:ACCOUNT:certificate/XXXX"
+  hosts:
+    - host: studio.staging.a1-agent-engine.internal
+      paths:
+        - path: /
+          pathType: Prefix

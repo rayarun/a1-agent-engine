@@ -1,0 +1,84 @@
+image:
+  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/sandbox-manager
+  tag: latest
+  pullPolicy: IfNotPresent
+
+workloadType: DaemonSet
+replicaCount: null
+
+containerPort: 8082
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 8082
+
+config:
+  LOG_LEVEL: "info"
+
+secretRefs: []
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8082
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8082
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+hpa:
+  enabled: false
+
+ingress:
+  enabled: false
+  className: "alb"
+  annotations: {}
+  hosts: []
+  tls: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+nodeSelector:
+  a1/sandbox: "true"
+
+tolerations:
+  - key: "a1/sandbox"
+    operator: Equal
+    value: "true"
+    effect: NoSchedule
+
+affinity: {}
+
+securityContext: {}
+
+containerSecurityContext:
+  privileged: true
+
+volumes:
+  - name: docker-sock
+    hostPath:
+      path: /var/run/docker.sock
+      type: Socket
+
+volumeMounts:
+  - name: docker-sock
+    mountPath: /var/run/docker.sock

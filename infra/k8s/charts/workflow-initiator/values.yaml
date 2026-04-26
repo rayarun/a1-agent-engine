@@ -1,0 +1,68 @@
+image:
+  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/workflow-initiator
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+containerPort: 8081
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 8081
+
+config:
+  TEMPORAL_HOSTPORT: "temporal.default.svc.cluster.local:7233"
+  AGENT_REGISTRY_URL: "http://agent-registry:8088"
+  LOG_LEVEL: "info"
+
+secretRefs: []
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+  limits:
+    cpu: "200m"
+    memory: "256Mi"
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8081
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8081
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
+ingress:
+  enabled: false
+  className: "alb"
+  annotations: {}
+  hosts: []
+  tls: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+securityContext: {}
+containerSecurityContext: {}
+volumes: []
+volumeMounts: []

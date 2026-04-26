@@ -1,0 +1,23 @@
+image:
+  tag: "placeholder"
+
+replicaCount: 1
+
+config:
+  TEMPORAL_HOSTPORT: "temporal.staging.internal:7233"
+  AGENT_REGISTRY_URL: "http://agent-registry:8088"
+  LOG_LEVEL: "debug"
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+  limits:
+    cpu: "200m"
+    memory: "256Mi"
+
+hpa:
+  enabled: false
+
+ingress:
+  enabled: false

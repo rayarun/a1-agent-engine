@@ -1,0 +1,10 @@
+apiVersion: v2
+name: sandbox-manager
+description: A1 Agent Engine - Sandbox Manager (DaemonSet for Docker-in-Docker)
+type: application
+version: 0.1.0
+appVersion: "latest"
+dependencies:
+  - name: a1-lib
+    version: "0.1.0"
+    repository: "file://../../_lib"
