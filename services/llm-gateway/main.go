@@ -58,14 +58,19 @@ func init() {
 
 	anthropicKey = os.Getenv("ANTHROPIC_API_KEY")
 	anthropicURL = os.Getenv("ANTHROPIC_BASE_URL")
-	if anthropicURL == "" {
-		anthropicURL = "https://api.anthropic.com/v1/messages"
-	} else {
-		log.Printf("LLM Gateway: Using custom Anthropic URL: %s", anthropicURL)
-	}
 
 	if anthropicKey != "" {
-		log.Println("LLM Gateway: Anthropic raw-HTTP configured")
+		keyPreview := anthropicKey[:10] + "..." + anthropicKey[len(anthropicKey)-10:]
+		log.Printf("LLM Gateway: Anthropic API Key loaded (preview: %s)", keyPreview)
+	} else {
+		log.Println("LLM Gateway: ANTHROPIC_API_KEY not set")
+	}
+
+	if anthropicURL == "" {
+		anthropicURL = "https://api.anthropic.com/v1/messages"
+		log.Println("LLM Gateway: Using default Anthropic URL")
+	} else {
+		log.Printf("LLM Gateway: Using custom Anthropic URL: %s", anthropicURL)
 	}
 
 	if openaiClient == nil && anthropicKey == "" {
@@ -87,7 +92,7 @@ func fetchRemoteModels() ([]string, error) {
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, _ := http.NewRequest("GET", modelsURL, nil)
-	req.Header.Set("x-api-key", key)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", key))
 	req.Header.Set("anthropic-version", "2023-06-01")
 
 	resp, err := client.Do(req)
@@ -258,26 +263,39 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("=== handleChatCompletions START: model=%s ===", req.Model)
+
 	// Routing Logic
 	if strings.Contains(req.Model, "mock") {
+		log.Println("-> Routing to Mock (model contains 'mock')")
 		handleMockInference(w, req)
 		return
 	}
 
 	mu.RLock()
 	hasAnthropicKey := anthropicKey != ""
+	keyPreview := ""
+	if anthropicKey != "" {
+		keyPreview = anthropicKey[:10] + "..." + anthropicKey[len(anthropicKey)-10:]
+	}
 	mu.RUnlock()
 
+	log.Printf("-> Model contains 'claude': %v, hasAnthropicKey: %v (key: %s)",
+		strings.Contains(req.Model, "claude"), hasAnthropicKey, keyPreview)
+
 	if strings.Contains(req.Model, "claude") && hasAnthropicKey {
+		log.Println("-> Routing to Anthropic")
 		handleAnthropicInference(w, req)
 		return
 	}
 
 	if openaiClient == nil {
+		log.Println("-> Routing to Mock (no openaiClient and not claude)")
 		handleMockInference(w, req)
 		return
 	}
 
+	log.Println("-> Routing to OpenAI")
 	// Proxy to OpenAI
 	resp, err := openaiClient.CreateChatCompletion(r.Context(), req)
 	if err != nil {
@@ -452,19 +470,31 @@ func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRe
 	body, _ := json.Marshal(antReq)
 	httpReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", key)
+	keyToUse := fmt.Sprintf("Bearer %s", key)
+	keyPreview := key[:10] + "..." + key[len(key)-10:]
+	log.Printf("=== Anthropic Request ===")
+	log.Printf("URL: %s", url)
+	log.Printf("Model: %s", antReq.Model)
+	log.Printf("Auth Key: %s", keyPreview)
+	httpReq.Header.Set("Authorization", keyToUse)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
 	client := &http.Client{}
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		log.Printf("=== Anthropic Request FAILED ===")
+		log.Printf("HTTP Error: %v", err)
 		http.Error(w, fmt.Sprintf("Anthropic HTTP error: %v", err), http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
 
+	log.Printf("=== Anthropic Response ===")
+	log.Printf("Status Code: %d", resp.StatusCode)
+
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
+		log.Printf("Error Body: %s", string(respBody))
 		http.Error(w, fmt.Sprintf("Anthropic API error (%d): %s", resp.StatusCode, string(respBody)), resp.StatusCode)
 		return
 	}
