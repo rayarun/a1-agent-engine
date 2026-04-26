@@ -1,0 +1,55 @@
+image:
+  tag: "placeholder"  # CI overwrites via --set image.tag=<git-sha>
+
+replicaCount: 3
+
+config:
+  LOG_LEVEL: "info"
+  ADMIN_API_PORT: "8089"
+  AGENT_REGISTRY_URL: "http://agent-registry:8088"
+  WORKFLOW_INITIATOR_URL: "http://workflow-initiator:8081"
+  SKILL_CATALOG_URL: "http://skill-catalog:8087"
+  TOOL_REGISTRY_URL: "http://tool-registry:8086"
+  SUB_AGENT_REGISTRY_URL: "http://sub-agent-registry:8084"
+  LLM_GATEWAY_URL: "http://llm-gateway:8083"
+
+secretRefs:
+  - envVarName: DATABASE_URL
+    secretName: admin-api-db-secret
+    secretKey: url
+  - envVarName: ADMIN_API_KEY
+    secretName: admin-api-auth-secret
+    secretKey: api-key
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+hpa:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 60
+  targetMemoryUtilizationPercentage: 75
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    kubernetes.io/ingress.class: "alb"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:ACCOUNT_PROD:certificate/YYYY"
+  hosts:
+    - host: admin-api.a1-agent-engine.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: admin-api-tls
+      hosts:
+        - admin-api.a1-agent-engine.example.com

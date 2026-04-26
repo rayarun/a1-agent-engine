@@ -1,0 +1,88 @@
+image:
+  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/admin-api
+  tag: latest
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+containerPort: 8089
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 8089
+
+config:
+  LOG_LEVEL: "info"
+  ADMIN_API_PORT: "8089"
+  AGENT_REGISTRY_URL: "http://agent-registry:8088"
+  WORKFLOW_INITIATOR_URL: "http://workflow-initiator:8081"
+  SKILL_CATALOG_URL: "http://skill-catalog:8087"
+  TOOL_REGISTRY_URL: "http://tool-registry:8086"
+  SUB_AGENT_REGISTRY_URL: "http://sub-agent-registry:8084"
+  LLM_GATEWAY_URL: "http://llm-gateway:8083"
+
+# Database and API key secrets (reference external secrets)
+secretRefs:
+  - envVarName: DATABASE_URL
+    secretName: admin-api-db-secret
+    secretKey: url
+  - envVarName: ADMIN_API_KEY
+    secretName: admin-api-auth-secret
+    secretKey: api-key
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8089
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 2
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8089
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+hpa:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
+ingress:
+  enabled: false
+  className: "alb"
+  annotations: {}
+  hosts: []
+  tls: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8089"
+  prometheus.io/path: "/metrics"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+securityContext: {}
+containerSecurityContext: {}
+volumes: []
+volumeMounts: []

@@ -1,0 +1,42 @@
+image:
+  tag: "placeholder"  # CI overwrites via --set image.tag=<git-sha>
+
+replicaCount: 3
+
+config:
+  NEXT_PUBLIC_ADMIN_API_URL: "https://admin-api.a1-agent-engine.example.com"
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+hpa:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 60
+  targetMemoryUtilizationPercentage: 75
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    kubernetes.io/ingress.class: "alb"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:ACCOUNT_PROD:certificate/YYYY"
+  hosts:
+    - host: admin.a1-agent-engine.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: admin-console-tls
+      hosts:
+        - admin.a1-agent-engine.example.com

@@ -1,0 +1,47 @@
+image:
+  tag: "placeholder"  # CI overwrites via --set image.tag=<git-sha>
+
+replicaCount: 1
+
+config:
+  LOG_LEVEL: "debug"
+  ADMIN_API_PORT: "8089"
+  AGENT_REGISTRY_URL: "http://agent-registry:8088"
+  WORKFLOW_INITIATOR_URL: "http://workflow-initiator:8081"
+  SKILL_CATALOG_URL: "http://skill-catalog:8087"
+  TOOL_REGISTRY_URL: "http://tool-registry:8086"
+  SUB_AGENT_REGISTRY_URL: "http://sub-agent-registry:8084"
+  LLM_GATEWAY_URL: "http://llm-gateway:8083"
+
+secretRefs:
+  - envVarName: DATABASE_URL
+    secretName: admin-api-db-secret
+    secretKey: url
+  - envVarName: ADMIN_API_KEY
+    secretName: admin-api-auth-secret
+    secretKey: api-key
+
+resources:
+  requests:
+    cpu: "50m"
+    memory: "64Mi"
+  limits:
+    cpu: "200m"
+    memory: "256Mi"
+
+hpa:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    kubernetes.io/ingress.class: "alb"
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:ACCOUNT:certificate/XXXX"
+  hosts:
+    - host: admin-api.staging.a1-agent-engine.internal
+      paths:
+        - path: /
+          pathType: Prefix
