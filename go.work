@@ -4,6 +4,7 @@ use (
 	./packages/go-shared
 	./packages/hook-engine
 	./packages/webhook-security
+	./services/admin-api
 	./services/agent-registry
 	./services/api-gateway
 	./services/llm-gateway

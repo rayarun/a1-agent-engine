@@ -3,7 +3,9 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/agent-platform/go-shared/pkg/models"
@@ -247,4 +249,218 @@ func (h *AdminHandler) HandleUpdateTenantStatus(w http.ResponseWriter, r *http.R
 	}
 
 	json.NewEncoder(w).Encode(updated)
+}
+
+// HandleGetLLMConfig proxies to LLM Gateway and returns current config.
+func (h *AdminHandler) HandleGetLLMConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	resp, err := http.Get("http://llm-gateway:8083/admin/config")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to reach LLM Gateway: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "LLM Gateway error", resp.StatusCode)
+		return
+	}
+
+	w.WriteHeader(resp.StatusCode)
+	fmt.Fprintf(w, "%s", readBody(resp.Body))
+}
+
+// HandlePutLLMConfig proxies to LLM Gateway and persists config to DB.
+func (h *AdminHandler) HandlePutLLMConfig(w http.ResponseWriter, r *http.Request) {
+	var req models.LLMConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Build request body for LLM Gateway
+	reqBody, _ := json.Marshal(req)
+	llmReq, err := http.NewRequest("PUT", "http://llm-gateway:8083/admin/config", strings.NewReader(string(reqBody)))
+	if err != nil {
+		http.Error(w, "Failed to create request", http.StatusInternalServerError)
+		return
+	}
+	llmReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	llmResp, err := client.Do(llmReq)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to reach LLM Gateway: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer llmResp.Body.Close()
+
+	// Also persist to platform_config table
+	if req.AnthropicAPIKey != "" {
+		_, _ = h.DB.Exec(r.Context(), `
+			INSERT INTO platform_config (key, value, updated_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+		`, "anthropic_api_key", req.AnthropicAPIKey)
+	}
+	if req.AnthropicBaseURL != "" {
+		_, _ = h.DB.Exec(r.Context(), `
+			INSERT INTO platform_config (key, value, updated_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+		`, "anthropic_base_url", req.AnthropicBaseURL)
+	}
+	if req.OpenAIAPIKey != "" {
+		_, _ = h.DB.Exec(r.Context(), `
+			INSERT INTO platform_config (key, value, updated_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+		`, "openai_api_key", req.OpenAIAPIKey)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(llmResp.StatusCode)
+	fmt.Fprintf(w, "%s", readBody(llmResp.Body))
+}
+
+// HandleListSystemAgents lists all platform-system tenant agents.
+func (h *AdminHandler) HandleListSystemAgents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT id, name, version, system_prompt, model, max_iterations, memory_budget_mb, status, created_at
+		FROM agents
+		WHERE tenant_id = 'platform-system'
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Query failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type AgentRow struct {
+		ID             string    `json:"id"`
+		Name           string    `json:"name"`
+		Version        string    `json:"version"`
+		SystemPrompt   string    `json:"system_prompt"`
+		Model          string    `json:"model"`
+		MaxIterations  int       `json:"max_iterations"`
+		MemoryBudgetMB int       `json:"memory_budget_mb"`
+		Status         string    `json:"status"`
+		CreatedAt      time.Time `json:"created_at"`
+	}
+
+	var agents []AgentRow
+	for rows.Next() {
+		var a AgentRow
+		if err := rows.Scan(&a.ID, &a.Name, &a.Version, &a.SystemPrompt, &a.Model, &a.MaxIterations, &a.MemoryBudgetMB, &a.Status, &a.CreatedAt); err != nil {
+			http.Error(w, fmt.Sprintf("Scan failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		agents = append(agents, a)
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"agents": agents,
+		"count":  len(agents),
+	})
+}
+
+// HandleGetSystemAgent retrieves a single system agent.
+func (h *AdminHandler) HandleGetSystemAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		http.Error(w, "agent_id is required", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	type AgentRow struct {
+		ID             string    `json:"id"`
+		Name           string    `json:"name"`
+		Version        string    `json:"version"`
+		SystemPrompt   string    `json:"system_prompt"`
+		Model          string    `json:"model"`
+		MaxIterations  int       `json:"max_iterations"`
+		MemoryBudgetMB int       `json:"memory_budget_mb"`
+		Status         string    `json:"status"`
+		CreatedAt      time.Time `json:"created_at"`
+	}
+
+	var a AgentRow
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT id, name, version, system_prompt, model, max_iterations, memory_budget_mb, status, created_at
+		FROM agents
+		WHERE id = $1 AND tenant_id = 'platform-system'
+	`, agentID).Scan(&a.ID, &a.Name, &a.Version, &a.SystemPrompt, &a.Model, &a.MaxIterations, &a.MemoryBudgetMB, &a.Status, &a.CreatedAt)
+
+	if err != nil {
+		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	}
+
+	json.NewEncoder(w).Encode(a)
+}
+
+// HandleUpdateSystemAgent updates a system agent manifest.
+func (h *AdminHandler) HandleUpdateSystemAgent(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("id")
+	if agentID == "" {
+		http.Error(w, "agent_id is required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Name           string `json:"name"`
+		Version        string `json:"version"`
+		SystemPrompt   string `json:"system_prompt"`
+		Model          string `json:"model"`
+		MaxIterations  int    `json:"max_iterations"`
+		MemoryBudgetMB int    `json:"memory_budget_mb"`
+		Status         string `json:"status"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	type AgentRow struct {
+		ID             string    `json:"id"`
+		Name           string    `json:"name"`
+		Version        string    `json:"version"`
+		SystemPrompt   string    `json:"system_prompt"`
+		Model          string    `json:"model"`
+		MaxIterations  int       `json:"max_iterations"`
+		MemoryBudgetMB int       `json:"memory_budget_mb"`
+		Status         string    `json:"status"`
+		CreatedAt      time.Time `json:"created_at"`
+	}
+
+	var a AgentRow
+	err := h.DB.QueryRow(r.Context(), `
+		UPDATE agents
+		SET name = $1, version = $2, system_prompt = $3, model = $4, max_iterations = $5, memory_budget_mb = $6, status = $7
+		WHERE id = $8 AND tenant_id = 'platform-system'
+		RETURNING id, name, version, system_prompt, model, max_iterations, memory_budget_mb, status, created_at
+	`, req.Name, req.Version, req.SystemPrompt, req.Model, req.MaxIterations, req.MemoryBudgetMB, req.Status, agentID).
+		Scan(&a.ID, &a.Name, &a.Version, &a.SystemPrompt, &a.Model, &a.MaxIterations, &a.MemoryBudgetMB, &a.Status, &a.CreatedAt)
+
+	if err != nil {
+		http.Error(w, "Agent not found or update failed", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(a)
+}
+
+func readBody(r io.ReadCloser) string {
+	defer r.Close()
+	body, _ := io.ReadAll(r)
+	return string(body)
 }

@@ -211,9 +211,13 @@ services:
     ports:
       - "8083:8083"
     environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     networks:
       - agent-net
 
@@ -294,6 +298,25 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    networks:
+      - agent-net
+
+  # ------------------------------------
+  # Admin Console  (port 3001)
+  # ------------------------------------
+  admin-console:
+    build:
+      context: ../../
+      dockerfile: apps/admin-console/Dockerfile
+      args:
+        NEXT_PUBLIC_ADMIN_API_URL: http://localhost:8089
+    container_name: admin-console
+    ports:
+      - "3001:3001"
+    environment:
+      - NEXT_PUBLIC_ADMIN_API_URL=http://localhost:8089
+    depends_on:
+      - admin-api
     networks:
       - agent-net
 

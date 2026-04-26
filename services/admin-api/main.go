@@ -36,11 +36,22 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handler.HandleHealth)
 	mux.Handle("POST /api/v1/admin/auth/verify", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleAuthVerify)))
+
+	// Tenant Management
 	mux.Handle("GET /api/v1/admin/tenants", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleListTenants)))
 	mux.Handle("POST /api/v1/admin/tenants", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleCreateTenant)))
 	mux.Handle("GET /api/v1/admin/tenants/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetTenant)))
 	mux.Handle("PUT /api/v1/admin/tenants/{id}/quota", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleUpdateTenantQuota)))
 	mux.Handle("PUT /api/v1/admin/tenants/{id}/status", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleUpdateTenantStatus)))
+
+	// LLM Configuration
+	mux.Handle("GET /api/v1/admin/llm/config", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetLLMConfig)))
+	mux.Handle("PUT /api/v1/admin/llm/config", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandlePutLLMConfig)))
+
+	// System Agents
+	mux.Handle("GET /api/v1/admin/system-agents", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleListSystemAgents)))
+	mux.Handle("GET /api/v1/admin/system-agents/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetSystemAgent)))
+	mux.Handle("PUT /api/v1/admin/system-agents/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleUpdateSystemAgent)))
 
 	log.Printf("Starting Admin API on :8089 (Admin Key: %s...)", adminAPIKey[:10])
 	if err := http.ListenAndServe(":8089", withCORS(mux)); err != nil {

@@ -378,3 +378,35 @@ type TenantStats struct {
 	MonthlyCost   float64     `json:"monthly_cost"`
 	Settings      *TenantSettings `json:"settings,omitempty"`
 }
+
+// --- LLM Configuration ---
+
+// LLMConfigResponse is returned by GET /admin/config.
+type LLMConfigResponse struct {
+	AnthropicBaseURL string `json:"anthropic_base_url"`
+	AnthropicKeySet  bool   `json:"anthropic_key_set"`
+	OpenAIKeySet     bool   `json:"openai_key_set"`
+	Mode             string `json:"mode"` // "mock" | "anthropic" | "custom"
+}
+
+// LLMConfigRequest is sent to PUT /admin/config.
+type LLMConfigRequest struct {
+	AnthropicAPIKey  string `json:"anthropic_api_key,omitempty"`
+	AnthropicBaseURL string `json:"anthropic_base_url,omitempty"`
+	OpenAIAPIKey     string `json:"openai_api_key,omitempty"`
+}
+
+// SystemAgent represents a platform-system agent (Manifest Assistant, etc).
+type SystemAgent struct {
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Version       string         `json:"version"`
+	SystemPrompt  string         `json:"system_prompt"`
+	Skills        []SkillRef     `json:"skills"`
+	Model         string         `json:"model"`
+	MaxIterations int            `json:"max_iterations"`
+	MemoryBudgetMB int           `json:"memory_budget_mb"`
+	Status        ResourceStatus `json:"status"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+}

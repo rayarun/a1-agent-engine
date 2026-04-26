@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -38,30 +40,64 @@ type configResponse struct {
 }
 
 type configRequest struct {
-	AnthropicAPIKey string `json:"anthropic_api_key"`
+	AnthropicAPIKey  string `json:"anthropic_api_key"`
 	AnthropicBaseURL string `json:"anthropic_base_url"`
+	OpenAIAPIKey     string `json:"openai_api_key"`
 }
 
 var (
 	mu           sync.RWMutex
+	dbPool       *pgxpool.Pool
 	openaiClient *openai.Client
 	anthropicKey string
 	anthropicURL string
+	openaiKey    string
 )
 
 func init() {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey != "" {
-		openaiClient = openai.NewClient(apiKey)
-		log.Println("LLM Gateway: OpenAI client initialized")
+	// Initialize database
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://postgres:postgres@localhost:5433/agentplatform"
 	}
 
+	var err error
+	dbPool, err = pgxpool.New(context.Background(), dbURL)
+	if err != nil {
+		log.Printf("LLM Gateway: Warning - could not connect to database: %v (running in memory-only mode)", err)
+		dbPool = nil
+	} else {
+		log.Println("LLM Gateway: Database connected")
+	}
+
+	// Load initial config from env or DB
+	loadConfig()
+
+	if openaiClient == nil && anthropicKey == "" {
+		log.Println("LLM Gateway: Running in Mock only mode (no API keys)")
+	}
+}
+
+func loadConfig() {
+	// Try to load from DB first
+	if dbPool != nil {
+		if err := loadConfigFromDB(); err != nil {
+			log.Printf("LLM Gateway: Failed to load config from DB: %v, falling back to env vars", err)
+			loadConfigFromEnv()
+		}
+	} else {
+		loadConfigFromEnv()
+	}
+}
+
+func loadConfigFromEnv() {
 	anthropicKey = os.Getenv("ANTHROPIC_API_KEY")
 	anthropicURL = os.Getenv("ANTHROPIC_BASE_URL")
+	openaiKey = os.Getenv("OPENAI_API_KEY")
 
 	if anthropicKey != "" {
 		keyPreview := anthropicKey[:10] + "..." + anthropicKey[len(anthropicKey)-10:]
-		log.Printf("LLM Gateway: Anthropic API Key loaded (preview: %s)", keyPreview)
+		log.Printf("LLM Gateway: Anthropic API Key loaded from env (preview: %s)", keyPreview)
 	} else {
 		log.Println("LLM Gateway: ANTHROPIC_API_KEY not set")
 	}
@@ -73,9 +109,49 @@ func init() {
 		log.Printf("LLM Gateway: Using custom Anthropic URL: %s", anthropicURL)
 	}
 
-	if openaiClient == nil && anthropicKey == "" {
-		log.Println("LLM Gateway: Running in Mock only mode (no API keys)")
+	if openaiKey != "" {
+		openaiClient = openai.NewClient(openaiKey)
+		log.Println("LLM Gateway: OpenAI client initialized from env")
 	}
+}
+
+func loadConfigFromDB() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rows, err := dbPool.Query(ctx, `SELECT key, value FROM platform_config`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return err
+		}
+
+		switch key {
+		case "anthropic_api_key":
+			anthropicKey = value
+		case "anthropic_base_url":
+			anthropicURL = value
+		case "openai_api_key":
+			openaiKey = value
+		}
+	}
+
+	if anthropicURL == "" {
+		anthropicURL = "https://api.anthropic.com/v1/messages"
+	}
+
+	if openaiKey != "" {
+		openaiClient = openai.NewClient(openaiKey)
+		log.Println("LLM Gateway: OpenAI client initialized from DB")
+	}
+
+	log.Println("LLM Gateway: Config loaded from DB")
+	return nil
 }
 
 func fetchRemoteModels() ([]string, error) {
@@ -159,11 +235,26 @@ func handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if req.AnthropicAPIKey != "" {
 		anthropicKey = req.AnthropicAPIKey
 		log.Println("LLM Gateway: Updated ANTHROPIC_API_KEY")
+		if dbPool != nil {
+			go persistConfigToDB("anthropic_api_key", anthropicKey)
+		}
 	}
 
 	if req.AnthropicBaseURL != "" {
 		anthropicURL = req.AnthropicBaseURL
 		log.Printf("LLM Gateway: Updated ANTHROPIC_BASE_URL to %s", anthropicURL)
+		if dbPool != nil {
+			go persistConfigToDB("anthropic_base_url", anthropicURL)
+		}
+	}
+
+	if req.OpenAIAPIKey != "" {
+		openaiKey = req.OpenAIAPIKey
+		openaiClient = openai.NewClient(openaiKey)
+		log.Println("LLM Gateway: Updated OPENAI_API_KEY")
+		if dbPool != nil {
+			go persistConfigToDB("openai_api_key", openaiKey)
+		}
 	}
 
 	baseURL := anthropicURL
@@ -182,6 +273,27 @@ func handlePutConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func persistConfigToDB(key, value string) {
+	if dbPool == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := dbPool.Exec(ctx, `
+		INSERT INTO platform_config (key, value, updated_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+	`, key, value)
+
+	if err != nil {
+		log.Printf("LLM Gateway: Failed to persist config to DB: %v", err)
+	} else {
+		log.Printf("LLM Gateway: Persisted config %s to DB", key)
+	}
 }
 
 func main() {
