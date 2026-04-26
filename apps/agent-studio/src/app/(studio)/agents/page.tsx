@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Plus, Trash2, Loader2, Bot, MessageSquare, X } from "lucide-react";
+import { Plus, Trash2, Loader2, Bot, MessageSquare, X, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { agentsApi, skillsApi, toolsApi, modelsApi } from "@/lib/api";
 import { ManifestAssistantPanel, AssistantDraft } from "@/components/manifest-assistant-panel";
@@ -115,13 +115,16 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-border">
             <SheetTitle>Create Agent</SheetTitle>
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="sm"
               onClick={() => setShowAssistant(!showAssistant)}
-              className="text-xs text-primary hover:underline transition-colors"
+              className="gap-2"
             >
-              {showAssistant ? "Hide" : "Show"} AI Assistant
-            </button>
+              <Sparkles size={16} />
+              {showAssistant ? "Hide" : "Show"} Assistant
+            </Button>
           </div>
 
           {/* Content: split pane or single pane */}
