@@ -118,6 +118,28 @@ export const modelsApi = {
     ),
 };
 
+// LLM Gateway Configuration
+export interface LLMConfig {
+  anthropic_base_url: string;
+  anthropic_key_set: boolean;
+  openai_key_set: boolean;
+  mode: "mock" | "anthropic" | "custom";
+}
+
+export interface LLMConfigUpdate {
+  anthropic_api_key?: string;
+  anthropic_base_url?: string;
+}
+
+export const llmConfigApi = {
+  get: () => req<LLMConfig>(LLM_GATEWAY, "/admin/config"),
+  update: (body: LLMConfigUpdate) =>
+    req<LLMConfig>(LLM_GATEWAY, "/admin/config", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+};
+
 // Chat SSE (api-gateway)
 export function openChatStream(
   agentId: string,
@@ -127,3 +149,19 @@ export function openChatStream(
   const url = `${API_GATEWAY}/api/v1/agents/${agentId}/chat?tenant_id=${encodeURIComponent(tenantId)}&message=${encodeURIComponent(message)}`;
   return new EventSource(url);
 }
+
+// System Agents (platform-system tenant)
+export const systemAgentsApi = {
+  chat: (message: string): Promise<Response> =>
+    fetch(`${API_GATEWAY}/api/v1/agents/manifest-assistant/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Tenant-ID": "platform-system",
+      },
+      body: JSON.stringify({
+        message,
+        tenant_id: "platform-system",
+      }),
+    }),
+};

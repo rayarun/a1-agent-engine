@@ -5,9 +5,10 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Plus, Trash2, Loader2, Bot, MessageSquare } from "lucide-react";
+import { Plus, Trash2, Loader2, Bot, MessageSquare, X } from "lucide-react";
 import Link from "next/link";
-import { agentsApi, skillsApi, modelsApi } from "@/lib/api";
+import { agentsApi, skillsApi, toolsApi, modelsApi } from "@/lib/api";
+import { ManifestAssistantPanel, AssistantDraft } from "@/components/manifest-assistant-panel";
 import { AgentRecord } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,7 +60,8 @@ const STATUS_COLORS: Record<string, string> = {
 
 function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
   const [open, setOpen] = useState(false);
-  const { register, handleSubmit, reset, control, formState: { errors } } = useForm<AgentForm>({
+  const [showAssistant, setShowAssistant] = useState(true);
+  const { register, handleSubmit, reset, control, setValue, formState: { errors } } = useForm<AgentForm>({
     resolver: zodResolver(agentSchema),
     defaultValues: {
       model: "claude-opus-4-7",
@@ -69,11 +71,16 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
       skills: [{ name: "", version: "1.0.0" }],
     },
   });
-  const { fields, append, remove } = useFieldArray({ control, name: "skills" });
+  const { fields, append, remove, replace } = useFieldArray({ control, name: "skills" });
 
   const { data: activeSkills } = useQuery({
     queryKey: ["skills", "active"],
     queryFn: () => skillsApi.list("active"),
+  });
+
+  const { data: approvedTools } = useQuery({
+    queryKey: ["tools", "approved"],
+    queryFn: () => toolsApi.list("approved"),
   });
 
   const { data: modelsData } = useQuery({
@@ -88,20 +95,42 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
     onSuccess: () => { reset(); setOpen(false); onCreated(); },
   });
 
+  const handleApplyAssistantDraft = (draft: AssistantDraft) => {
+    if (draft.system_prompt) {
+      setValue("system_prompt", draft.system_prompt);
+    }
+    if (draft.skills && draft.skills.length > 0) {
+      replace(draft.skills);
+    }
+  };
+
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger render={<Button size="sm" className="gap-1.5" />}>
         <Plus className="h-4 w-4" />
         New Agent
       </SheetTrigger>
-      <SheetContent className="w-[520px] overflow-y-auto">
-        <SheetHeader>
-          <SheetTitle>Create Agent</SheetTitle>
-        </SheetHeader>
-        <form
-          onSubmit={handleSubmit((d) => mutation.mutate(d))}
-          className="mt-6 flex flex-col gap-4"
-        >
+      <SheetContent className="sm:max-w-[900px] overflow-hidden flex flex-col p-0">
+        <div className="flex flex-col h-full">
+          {/* Header */}
+          <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+            <SheetTitle>Create Agent</SheetTitle>
+            <button
+              type="button"
+              onClick={() => setShowAssistant(!showAssistant)}
+              className="text-xs text-primary hover:underline"
+            >
+              {showAssistant ? "Hide" : "Show"} AI Assistant
+            </button>
+          </div>
+
+          {/* Content: split pane or single pane */}
+          <div className="flex flex-1 overflow-hidden">
+            {/* Form */}
+            <form
+              onSubmit={handleSubmit((d) => mutation.mutate(d))}
+              className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4"
+            >
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
               <Label>Agent ID</Label>
@@ -187,13 +216,26 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
             ))}
           </div>
 
-          {mutation.error && <p className="text-xs text-destructive">{String(mutation.error)}</p>}
+              {mutation.error && <p className="text-xs text-destructive">{String(mutation.error)}</p>}
 
-          <Button type="submit" disabled={mutation.isPending} className="mt-2">
-            {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Create Agent
-          </Button>
-        </form>
+              <Button type="submit" disabled={mutation.isPending} className="mt-2">
+                {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Create Agent
+              </Button>
+            </form>
+
+            {/* Assistant Panel */}
+            {showAssistant && (
+              <div className="w-96 border-l border-border flex-shrink-0 overflow-hidden">
+                <ManifestAssistantPanel
+                  availableSkills={activeSkills ?? []}
+                  availableTools={approvedTools ?? []}
+                  onApply={handleApplyAssistantDraft}
+                />
+              </div>
+            )}
+          </div>
+        </div>
       </SheetContent>
     </Sheet>
   );
