@@ -110,7 +110,7 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
         <Plus className="h-4 w-4" />
         New Agent
       </SheetTrigger>
-      <SheetContent className="sm:max-w-[900px] overflow-hidden flex flex-col p-0">
+      <SheetContent className="sm:max-w-[1000px] overflow-hidden flex flex-col p-0">
         <div className="flex flex-col h-full">
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-border">
@@ -118,7 +118,7 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
             <button
               type="button"
               onClick={() => setShowAssistant(!showAssistant)}
-              className="text-xs text-primary hover:underline"
+              className="text-xs text-primary hover:underline transition-colors"
             >
               {showAssistant ? "Hide" : "Show"} AI Assistant
             </button>
@@ -129,7 +129,7 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
             {/* Form */}
             <form
               onSubmit={handleSubmit((d) => mutation.mutate(d))}
-              className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4"
+              className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4 min-w-0"
             >
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
@@ -226,7 +226,7 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
 
             {/* Assistant Panel */}
             {showAssistant && (
-              <div className="w-96 border-l border-border flex-shrink-0 overflow-hidden">
+              <div className="w-[420px] border-l border-border flex-shrink-0 overflow-hidden">
                 <ManifestAssistantPanel
                   availableSkills={activeSkills ?? []}
                   availableTools={approvedTools ?? []}

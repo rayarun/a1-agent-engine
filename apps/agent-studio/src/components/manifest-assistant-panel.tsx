@@ -59,19 +59,19 @@ interface ManifestAssistantPanelProps {
 const ThinkingBlock: React.FC<{ content?: string }> = ({ content }) => {
   const [isOpen, setIsOpen] = useState(false);
   return (
-    <div className="mb-3 border border-muted-foreground/20 rounded bg-muted/50 p-2">
+    <div className="border border-yellow-500/20 rounded bg-yellow-50/30 dark:bg-yellow-900/10 p-2">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground w-full"
+        className="flex items-center gap-2 text-xs text-yellow-700 dark:text-yellow-600 hover:text-yellow-800 dark:hover:text-yellow-500 w-full transition-colors"
       >
         <ChevronDown
           size={14}
           className={cn("transition-transform", isOpen && "rotate-180")}
         />
-        <span className="italic">thinking…</span>
+        <span className="italic font-medium">💭 Thinking</span>
       </button>
       {isOpen && content && (
-        <div className="mt-2 text-xs font-mono text-muted-foreground bg-background/50 p-2 rounded overflow-auto max-h-48">
+        <div className="mt-2 text-xs font-mono text-muted-foreground bg-background/50 p-2 rounded overflow-auto max-h-40 border-t border-yellow-500/10">
           {content}
         </div>
       )}
@@ -86,33 +86,33 @@ const ToolCallBlock: React.FC<{
 }> = ({ toolName, toolArgs, toolResult }) => {
   const [isOpen, setIsOpen] = useState(false);
   return (
-    <div className="mb-3 border border-yellow-600/30 rounded bg-yellow-50/20 dark:bg-yellow-900/10 p-2">
+    <div className="border border-blue-600/30 rounded bg-blue-50/20 dark:bg-blue-900/10 p-2">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 text-xs text-yellow-700 dark:text-yellow-600 hover:text-yellow-800 dark:hover:text-yellow-500 w-full"
+        className="flex items-center gap-2 text-xs text-blue-700 dark:text-blue-600 hover:text-blue-800 dark:hover:text-blue-500 w-full transition-colors font-medium"
       >
         <ChevronDown
           size={14}
           className={cn("transition-transform", isOpen && "rotate-180")}
         />
-        <span>Tool: {toolName}</span>
+        <span>🔧 {toolName || "Tool"}</span>
       </button>
       {isOpen && (
-        <div className="mt-2 space-y-1">
-          {toolArgs && (
+        <div className="mt-2 space-y-2 border-t border-blue-500/10 pt-2">
+          {toolArgs !== undefined && toolArgs !== null && (
             <div>
-              <div className="text-[10px] text-muted-foreground">Args:</div>
-              <div className="text-xs font-mono bg-background/50 p-1 rounded overflow-auto max-h-32">
+              <div className="text-[10px] font-medium text-muted-foreground">Parameters:</div>
+              <div className="text-xs font-mono bg-background/50 p-2 rounded overflow-auto max-h-32">
                 {JSON.stringify(toolArgs, null, 2)}
               </div>
             </div>
           )}
-          {toolResult && (
+          {toolResult !== undefined && toolResult !== null && (
             <div>
-              <div className="text-[10px] text-green-700 dark:text-green-600">
+              <div className="text-[10px] font-medium text-green-700 dark:text-green-600">
                 Result:
               </div>
-              <div className="text-xs font-mono bg-background/50 p-1 rounded overflow-auto max-h-32">
+              <div className="text-xs font-mono bg-background/50 p-2 rounded overflow-auto max-h-32">
                 {typeof toolResult === "string"
                   ? toolResult
                   : JSON.stringify(toolResult, null, 2)}
@@ -126,16 +126,16 @@ const ToolCallBlock: React.FC<{
 };
 
 const UserMessage: React.FC<{ content: string }> = ({ content }) => (
-  <div className="mb-4 flex justify-end">
-    <div className="max-w-[80%] bg-primary text-primary-foreground rounded-lg p-3 text-sm">
+  <div className="flex justify-end">
+    <div className="max-w-[85%] bg-primary text-primary-foreground rounded-lg px-3 py-2 text-sm break-words">
       {content}
     </div>
   </div>
 );
 
 const AssistantMessage: React.FC<{ message: Message }> = ({ message }) => (
-  <div className="mb-4 flex justify-start">
-    <div className="max-w-[80%]">
+  <div className="flex justify-start">
+    <div className="max-w-[95%] space-y-2">
       {message.events?.map((evt, idx) => {
         if (evt.type === "thinking")
           return (
@@ -152,12 +152,14 @@ const AssistantMessage: React.FC<{ message: Message }> = ({ message }) => (
           );
         return null;
       })}
-      <div className="text-sm text-foreground whitespace-pre-wrap break-words bg-muted/30 rounded p-3">
-        {message.content}
-        {message.streaming && (
-          <span className="animate-pulse ml-1">▌</span>
-        )}
-      </div>
+      {message.content && (
+        <div className="text-sm text-foreground whitespace-pre-wrap break-words bg-muted/40 rounded px-3 py-2">
+          {message.content}
+          {message.streaming && (
+            <span className="animate-pulse ml-1">▌</span>
+          )}
+        </div>
+      )}
     </div>
   </div>
 );
@@ -377,22 +379,22 @@ export const ManifestAssistantPanel: React.FC<ManifestAssistantPanelProps> = ({
   }, [messages]);
 
   return (
-    <div className="flex flex-col h-full gap-0 border-l border-border">
+    <div className="flex flex-col h-full bg-background">
       {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/40 flex-shrink-0">
         <Sparkles size={16} className="text-primary" />
         <h3 className="text-sm font-semibold">Manifest Assistant</h3>
       </div>
 
       {/* Messages Area */}
-      <ScrollArea
+      <div
         ref={scrollRef}
-        className="flex-1 px-4 py-3 overflow-y-auto"
+        className="flex-1 overflow-y-auto px-4 py-3 space-y-3 min-h-0"
       >
         {messages.length === 0 && (
-          <div className="text-center py-8 text-sm text-muted-foreground">
-            <p className="mb-2">👋 Tell me what your agent should do.</p>
-            <p className="text-xs">I'll draft a system prompt and recommend skills from your catalog.</p>
+          <div className="text-center py-12 text-sm text-muted-foreground">
+            <p className="mb-2 text-base">✨ Describe your agent</p>
+            <p className="text-xs leading-relaxed">What should this agent do? I'll draft a system prompt and recommend skills from your catalog.</p>
           </div>
         )}
         {messages.map((msg) =>
@@ -402,17 +404,17 @@ export const ManifestAssistantPanel: React.FC<ManifestAssistantPanelProps> = ({
             <AssistantMessage key={msg.id} message={msg} />
           )
         )}
-      </ScrollArea>
+      </div>
 
       {/* Apply Section */}
       {applyable && (
-        <div className="px-4 py-3 border-t border-border bg-muted/30 space-y-2">
+        <div className="px-4 py-2 border-t border-border bg-muted/20 space-y-2 flex-shrink-0">
           <div className="flex gap-2">
             <Button
               size="sm"
               onClick={handleApply}
               disabled={applying}
-              className="flex-1"
+              className="flex-1 h-8"
             >
               {applying ? (
                 <>
@@ -427,7 +429,8 @@ export const ManifestAssistantPanel: React.FC<ManifestAssistantPanelProps> = ({
               size="sm"
               variant="outline"
               onClick={handleCopyProposedSkills}
-              className="px-2"
+              className="px-2 h-8"
+              title="Copy proposed skills"
             >
               {copied ? (
                 <Check size={14} />
@@ -437,9 +440,9 @@ export const ManifestAssistantPanel: React.FC<ManifestAssistantPanelProps> = ({
             </Button>
           </div>
           {applyable.skills && applyable.skills.length > 0 && (
-            <div className="text-xs text-muted-foreground">
-              <p>Recommended skills:</p>
-              <div className="flex flex-wrap gap-1 mt-1">
+            <div className="text-xs text-muted-foreground space-y-1">
+              <p className="font-medium">Recommended skills:</p>
+              <div className="flex flex-wrap gap-1">
                 {applyable.skills.map((s) => (
                   <Badge key={`${s.name}-${s.version}`} variant="secondary" className="text-xs">
                     {s.name} v{s.version}
@@ -452,7 +455,7 @@ export const ManifestAssistantPanel: React.FC<ManifestAssistantPanelProps> = ({
       )}
 
       {/* Input Area */}
-      <div className="px-4 py-3 border-t border-border gap-2 flex flex-col">
+      <div className="px-4 py-3 border-t border-border bg-background flex-shrink-0 space-y-2">
         <Textarea
           placeholder="Describe what this agent should do…"
           value={input}
@@ -464,14 +467,14 @@ export const ManifestAssistantPanel: React.FC<ManifestAssistantPanelProps> = ({
             }
           }}
           disabled={streaming}
-          className="text-sm resize-none"
-          rows={3}
+          className="text-sm resize-none min-h-[72px]"
+          rows={2}
         />
         <Button
           onClick={sendMessage}
           disabled={streaming || !input.trim()}
           size="sm"
-          className="w-full"
+          className="w-full h-8"
         >
           {streaming ? (
             <>
