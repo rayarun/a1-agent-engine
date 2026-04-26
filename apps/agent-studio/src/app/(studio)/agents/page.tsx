@@ -110,7 +110,7 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
         <Plus className="h-4 w-4" />
         New Agent
       </SheetTrigger>
-      <SheetContent className="sm:max-w-[1000px] overflow-hidden flex flex-col p-0">
+      <SheetContent className="sm:max-w-[600px] overflow-hidden flex flex-col p-0">
         <SheetHeader className="border-b border-border px-6 py-4 flex flex-row items-center justify-between">
           <SheetTitle className="text-lg font-semibold">Create Agent</SheetTitle>
           <Button
@@ -124,15 +124,12 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
             {showAssistant ? "Hide" : "Show"} Assistant
           </Button>
         </SheetHeader>
-        <div className="flex flex-col h-full flex-1">
 
-          {/* Content: split pane or single pane */}
-          <div className="flex flex-1 overflow-hidden">
-            {/* Form */}
-            <form
-              onSubmit={handleSubmit((d) => mutation.mutate(d))}
-              className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4 min-w-0"
-            >
+        {/* Form - Full Width */}
+        <form
+          onSubmit={handleSubmit((d) => mutation.mutate(d))}
+          className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4"
+        >
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
               <Label>Agent ID</Label>
@@ -218,27 +215,36 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
             ))}
           </div>
 
-              {mutation.error && <p className="text-xs text-destructive">{String(mutation.error)}</p>}
+          {mutation.error && <p className="text-xs text-destructive">{String(mutation.error)}</p>}
 
-              <Button type="submit" disabled={mutation.isPending} className="mt-2">
-                {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Create Agent
-              </Button>
-            </form>
-
-            {/* Assistant Panel */}
-            {showAssistant && (
-              <div className="w-[420px] border-l border-border flex-shrink-0 overflow-hidden">
-                <ManifestAssistantPanel
-                  availableSkills={activeSkills ?? []}
-                  availableTools={approvedTools ?? []}
-                  onApply={handleApplyAssistantDraft}
-                />
-              </div>
-            )}
-          </div>
-        </div>
+          <Button type="submit" disabled={mutation.isPending} className="mt-2">
+            {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Create Agent
+          </Button>
+        </form>
       </SheetContent>
+
+      {/* Assistant Overlay Sheet */}
+      <Sheet open={showAssistant} onOpenChange={setShowAssistant}>
+        <SheetContent
+          side="right"
+          className="w-[440px] p-0 border-l border-border"
+        >
+          <SheetHeader className="border-b border-border px-4 py-3">
+            <SheetTitle className="flex items-center gap-2">
+              <Sparkles size={18} className="text-primary" />
+              Manifest Assistant
+            </SheetTitle>
+          </SheetHeader>
+          <div className="flex-1 overflow-hidden h-[calc(100vh-60px)]">
+            <ManifestAssistantPanel
+              availableSkills={activeSkills ?? []}
+              availableTools={approvedTools ?? []}
+              onApply={handleApplyAssistantDraft}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
     </Sheet>
   );
 }
