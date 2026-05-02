@@ -98,6 +98,9 @@ Agent Teams (Orchestration, decomposition, synthesis)
 | Agent Registry | 8088 | Go | Agent manifests |
 | **Admin Plane** | | | |
 | Admin API | 8089 | Go | Platform admin backend; tenant mgmt |
+| **MCP Integration** | | | |
+| MCP Registry | 8090 | Go | External MCP server hub (client) |
+| MCP Server | 8091 | Go | Platform MCP endpoint (server) |
 | **Frontend & Observability** | | | |
 | Agent Studio | 3000 | Next.js | Builder UI; Ops Dashboard |
 | Admin Console | 3001 | Next.js | Platform administration UI |
@@ -143,7 +146,9 @@ a1-agent-engine/
 │   ├── skill-dispatcher/       # Tool routing
 │   ├── sub-agent-registry/     # Sub-agent contracts
 │   ├── agent-registry/         # Agent manifests
-│   └── admin-api/              # Platform administration backend
+│   ├── admin-api/              # Platform administration backend
+│   ├── mcp-registry/           # External MCP server hub (client)
+│   └── mcp-server/             # Platform MCP endpoint (server)
 │
 ├── apps/
 │   ├── agent-studio/           # Next.js frontend for agent builders
@@ -189,6 +194,20 @@ All agent execution backed by Temporal workflows—resumable from last checkpoin
 - **Temporal UI**: Workflow history, task queue depth, signal monitoring
 - **Streamlit Dashboard**: SRE-focused metrics and logs
 - **Structured Logging**: JSON logs with tenant context
+
+### MCP Protocol Support
+
+The platform integrates the **Model Context Protocol** (MCP) bidirectionally:
+
+- **MCP Client** (`services/mcp-registry`, port 8090): Agents connect to external MCP servers (GitHub, Filesystem, etc.) at runtime. Tools from external servers are automatically discovered, cached, and available in the agent's tool context without platform redeployment. Tool naming convention: `mcp__{server_name}__{tool_name}` ensures global uniqueness.
+
+- **MCP Server** (`services/mcp-server`, port 8091): Platform skills are exposed as an MCP endpoint for external clients (Claude Desktop, other MCP-compatible tools) to discover and invoke. Access is token-gated and scoped to tenants.
+
+**Key Benefits:**
+- Agents gain access to any MCP-compatible tool without code changes
+- External platforms can integrate with platform skills via standard MCP protocol
+- Tool discovery is cached to minimize overhead
+- Per-tenant security: MCP servers and clients are isolated by tenant
 
 ### AI-Assisted Agent Design (Manifest Assistant)
 

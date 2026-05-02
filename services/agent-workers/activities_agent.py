@@ -43,6 +43,69 @@ async def invoke_skill(skill_name: str, args: dict, tenant_id: str, agent_id: st
 
 
 @activity.defn
+async def discover_mcp_tools(server_ids: list[str], tenant_id: str) -> list[dict]:
+    """Discovers tools from external MCP servers and returns OpenAI-compatible tool definitions."""
+    mcp_registry_url = os.getenv("MCP_REGISTRY_URL", "http://localhost:8090")
+    tools = []
+
+    try:
+        async with httpx.AsyncClient() as client:
+            for server_id in server_ids:
+                try:
+                    resp = await client.get(
+                        f"{mcp_registry_url}/api/v1/mcp/servers/{server_id}/tools",
+                        headers={"X-Tenant-ID": tenant_id},
+                        timeout=30.0,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+
+                    for tool in data.get("tools", []):
+                        tool_def = {
+                            "type": "function",
+                            "function": {
+                                "name": f"mcp__{tool.get('server_name', 'unknown')}__{tool['name']}",
+                                "description": tool.get("description", ""),
+                                "parameters": tool.get("inputSchema", {}),
+                            },
+                            "__mcp_meta": {
+                                "server_id": server_id,
+                                "tool_name": tool["name"],
+                            },
+                        }
+                        tools.append(tool_def)
+                except Exception as e:
+                    logging.error(f"Failed to discover tools from MCP server {server_id}: {e}")
+                    continue
+    except Exception as e:
+        logging.error(f"MCP tool discovery failed: {e}")
+
+    return tools
+
+
+@activity.defn
+async def invoke_mcp_tool(server_id: str, tool_name: str, args: dict, tenant_id: str) -> str:
+    """Invokes a tool on an external MCP server."""
+    mcp_registry_url = os.getenv("MCP_REGISTRY_URL", "http://localhost:8090")
+    logging.info(f"Invoking MCP tool '{tool_name}' on server {server_id}")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{mcp_registry_url}/api/v1/mcp/servers/{server_id}/call",
+                json={"tool_name": tool_name, "args": args},
+                headers={"X-Tenant-ID": tenant_id},
+                timeout=60.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return json.dumps(data.get("result", data))
+    except Exception as e:
+        logging.error(f"MCP tool invocation failed: {e}")
+        return f"Error invoking MCP tool '{tool_name}': {e}"
+
+
+@activity.defn
 async def reasoning_step(messages: list[dict], model: str, tool_defs: list[dict] | None = None) -> dict:
     """Executes a single LLM reasoning step via the LLM Gateway."""
     gateway_url = os.getenv("LLM_GATEWAY_URL", "http://localhost:8083/v1")

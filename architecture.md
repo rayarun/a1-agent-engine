@@ -275,6 +275,170 @@ CREATE TABLE platform_config (
 
 ---
 
+## 1.3 MCP Integration Architecture
+
+The **MCP Integration** layer enables bidirectional tool discovery and invocation via the Model Context Protocol (HTTP + SSE transport). Agents gain access to external tools without platform redeployment, and external MCP clients gain access to platform skills via a token-gated MCP server endpoint.
+
+### MCP Client: `services/mcp-registry` (port 8090)
+
+A Go service managing external MCP server connections per tenant. Responsibilities:
+
+1. **Server Registration & Discovery**:
+   - Agents specify `mcp_servers: ["server-id-1", "server-id-2"]` in their manifest
+   - At workflow start, the `discover_mcp_tools` activity queries the MCP Registry to fetch available tools
+   - Tools are cached in `mcp_tool_cache` to avoid redundant network calls on every workflow invocation
+   - Cache is validated on each agent start and refreshed if stale (TTL configurable, default 1 hour)
+
+2. **Tool Naming Convention**:
+   - External MCP tools are renamed to `mcp__{server_name}__{tool_name}` to ensure globally unique identifiers
+   - This naming prevents collisions with platform skills and allows bidirectional routing (tool name → server mapping)
+
+3. **Tool Invocation**:
+   - When a workflow invokes a tool matching `mcp__*`, the `invoke_mcp_tool` activity routes the call to the MCP Registry
+   - The registry translates the namespaced tool name back to the original server and tool name
+   - HTTP POST to the external MCP server with JSON-RPC 2.0 payload
+   - Result is returned to the workflow for further reasoning
+
+4. **Data Model**:
+   ```sql
+   CREATE TABLE mcp_servers (
+       id TEXT PRIMARY KEY,
+       tenant_id TEXT NOT NULL,
+       name TEXT NOT NULL,          -- e.g., "github-mcp", "filesystem"
+       url TEXT NOT NULL,           -- e.g., http://github-mcp:3000
+       enabled BOOLEAN DEFAULT true,
+       created_at TIMESTAMPTZ DEFAULT NOW(),
+       updated_at TIMESTAMPTZ DEFAULT NOW()
+   );
+   
+   CREATE TABLE mcp_tool_cache (
+       id TEXT PRIMARY KEY,
+       mcp_server_id TEXT NOT NULL REFERENCES mcp_servers(id),
+       tenant_id TEXT NOT NULL,
+       tool_name TEXT NOT NULL,
+       description TEXT,
+       input_schema JSONB,          -- OpenAI-compatible parameters schema
+       cached_at TIMESTAMPTZ DEFAULT NOW(),
+       UNIQUE(mcp_server_id, tool_name)
+   );
+   ```
+
+5. **REST API**:
+   - `POST /api/v1/mcp/servers` — Register MCP server (requires `X-Tenant-ID`)
+   - `GET /api/v1/mcp/servers` — List servers for tenant
+   - `GET /api/v1/mcp/servers/:id/tools` — Discover tools (caches results)
+   - `POST /api/v1/mcp/servers/:id/tools/refresh` — Force refresh cache
+   - `POST /api/v1/mcp/servers/:id/call` — Invoke tool (routes to external server)
+
+### MCP Server: `services/mcp-server` (port 8091)
+
+A Go service exposing platform skills as an MCP server endpoint for external MCP clients. Responsibilities:
+
+1. **Token-Gated Authentication**:
+   - External clients authenticate with `Authorization: Bearer <token>`
+   - Tokens are SHA-256 hashed and stored in `mcp_tokens` table with tenant association
+   - Each token is scoped to a single tenant; only that tenant's skills are visible
+
+2. **MCP Protocol Implementation**:
+   - Implements JSON-RPC 2.0 over HTTP POST at `/mcp`
+   - Supports `initialize` method: returns server capabilities
+   - Supports `tools/list` method: queries skill-catalog for available skills, maps each to MCP tool format
+   - Supports `tools/call` method: routes invocations to skill-dispatcher with tenant context
+   - Implements SSE stream at `/mcp/sse` for spec compliance (no proactive events sent yet)
+
+3. **Tool Discovery**:
+   - On `tools/list`, fetches all skills from `skill-catalog` for the token's tenant
+   - Converts each skill to MCP tool format:
+     ```json
+     {
+       "name": "skill_name",
+       "description": "Skill description from manifest",
+       "inputSchema": {
+         "type": "object",
+         "properties": { ... skill input schema ... },
+         "required": [ ... ]
+       }
+     }
+     ```
+
+4. **Tool Invocation**:
+   - On `tools/call` with `{"name": "skill_name", "arguments": {...}}`:
+   - Extracts tenant from token
+   - POSTs to skill-dispatcher at `:8085/api/v1/skills/{name}/invoke`
+   - Forwards request with `X-Tenant-ID: {tenant}` header
+   - Returns result or error to the external MCP client
+
+5. **Data Model**:
+   ```sql
+   CREATE TABLE mcp_tokens (
+       id TEXT PRIMARY KEY,
+       token_hash TEXT NOT NULL UNIQUE,  -- SHA-256 hash of raw bearer token
+       tenant_id TEXT NOT NULL,
+       description TEXT,
+       created_at TIMESTAMPTZ DEFAULT NOW(),
+       expires_at TIMESTAMPTZ            -- NULL = never expires
+   );
+   ```
+
+6. **Admin Console Integration**:
+   - New page: `/admin/mcp-servers` for token lifecycle management
+   - Issues new tokens (generates 32-byte random, displays once, stores hash)
+   - Revokes tokens (soft-delete via expires_at)
+   - Shows MCP server URL for external client configuration
+
+### Agent Workflow Changes
+
+`services/agent-workers/workflows.py` — Enhanced ReAct loop:
+
+1. **MCP Tool Discovery** (after manifest load):
+   ```python
+   if manifest.mcp_servers:
+       mcp_tool_defs = await workflow.execute_activity(
+           "discover_mcp_tools",
+           args=[manifest.mcp_servers, tenant_id],
+           start_to_close_timeout=timedelta(seconds=30),
+       )
+       # Strip __mcp_meta before LLM, store in lookup map for dispatch
+       mcp_meta_map = {}
+       for t in mcp_tool_defs:
+           meta = t.pop("__mcp_meta", None)
+           if meta:
+               mcp_meta_map[t["function"]["name"]] = meta
+       tool_defs.extend(mcp_tool_defs)
+   ```
+
+2. **Tool Dispatch** (in ReAct loop tool handling):
+   ```python
+   elif tool_name.startswith("mcp__"):
+       meta = mcp_meta_map.get(tool_name, {})
+       result = await workflow.execute_activity(
+           "invoke_mcp_tool",
+           args=[meta["server_id"], meta["tool_name"], args_dict, tenant_id],
+           start_to_close_timeout=timedelta(seconds=60),
+       )
+   ```
+
+### AgentManifest Extension
+
+`packages/go-shared/pkg/models/models.go`:
+
+```go
+type AgentManifest struct {
+    // ... existing fields ...
+    MCPServers []string `json:"mcp_servers,omitempty"`  // IDs of external MCP servers
+}
+```
+
+### Integration Points
+
+- **MCP Client ↔ External MCP Servers**: HTTP POST JSON-RPC 2.0, no auth (server responsibility)
+- **MCP Client ↔ Agent Workers**: Temporal activities `discover_mcp_tools` and `invoke_mcp_tool`
+- **MCP Server ↔ Skill Dispatcher**: HTTP POST to `/api/v1/skills/{name}/invoke` with `X-Tenant-ID`
+- **MCP Server ↔ Skill Catalog**: HTTP GET to `/api/v1/skills?tenant_id={id}` for tool discovery
+- **Admin Console ↔ MCP Token Management**: Direct DB reads/writes to `mcp_tokens` (no separate API needed)
+
+---
+
 ## 2. Physical Architecture (AWS Native)
 Maps the logical components to an AWS cloud-native environment, utilizing managed services.
 
@@ -639,6 +803,8 @@ agentic-paas/
 - **Context Hydrator (Go/Python)**: Queries tenant-partitioned pgvector for semantically relevant long-term memories and injects Skill SOPs into the agent's system prompt before each LLM reasoning step.
 - **LLM Gateway (Go / LiteLLM)**: Unified inference proxy. Normalizes API formats across providers. Routes per-sub-agent model selections. Enforces token budget limits. Supports fallback to local Ollama/vLLM endpoints for data-sovereign deployments.
 - **Sandbox Manager (Go)**: Provisions ephemeral Docker containers with blocked egress for arbitrary tool code execution. Destroys containers immediately post-execution. Returns structured stdout/stderr payloads to the calling worker.
+- **MCP Registry (Go)**: External MCP server hub for per-tenant tool discovery and invocation. Caches tool definitions from external MCP servers to avoid redundant discovery calls. Routes workflow tool invocations to external servers via HTTP POST JSON-RPC 2.0.
+- **MCP Server (Go)**: Exposes platform skills as an MCP server endpoint for external MCP-compatible clients (e.g., Claude Desktop). Authenticates external clients with SHA-256 hashed bearer tokens scoped to tenant. Implements JSON-RPC 2.0 over HTTP + SSE.
 - **Observability Sink**: OTel Collector Daemons on each EKS node. Export structured traces, logs, and metrics to Prometheus/Grafana/Jaeger. Team execution traces include sub-agent swimlane metadata for DAG rendering in Agent Studio.
 
 ## 9. Low-Level Component Design & API Contracts
@@ -703,12 +869,35 @@ SELECT create_hypertable('cost_events', 'time');
 ```
 
 ### 9.2 Service Languages & Protocols
-Explicitly decoupled communication boundaries:
+
+**Port Allocation:**
+
+| Service | Port | Protocol | Purpose |
+|---|---|---|---|
+| API Gateway | 8080 | REST/JSON | User-facing platform entry point |
+| Workflow Initiator | 8081 | gRPC | Temporal workflow submission |
+| Sandbox Manager | 8082 | REST/JSON | Ephemeral code execution |
+| LLM Gateway | 8083 | REST/JSON | Unified LLM provider proxy |
+| Sub-Agent Registry | 8084 | REST/JSON | Versioned sub-agent contracts |
+| Skill Dispatcher | 8085 | REST/JSON | Skill command routing + hooks |
+| Tool Registry | 8086 | REST/JSON | Tool spec registration |
+| Skill Catalog | 8087 | REST/JSON | Skill manifest + version registry |
+| Agent Registry | 8088 | REST/JSON | Agent manifest storage |
+| Admin API | 8089 | REST/JSON | Cross-tenant platform governance |
+| MCP Registry | 8090 | HTTP POST JSON-RPC 2.0 | External MCP server hub (client side) |
+| MCP Server | 8091 | HTTP POST JSON-RPC 2.0 + SSE | Platform MCP endpoint (server side) |
+| Temporal Server | 7233 | gRPC | Workflow orchestration |
+| Admin Console | 3001 | Next.js/REST | Platform administration UI |
+| Agent Studio | 3000 | Next.js/REST | Tenant agent creation UI |
+
+**Communication Boundaries:**
 - **Agent Studio <--> Gateway**: `REST/JSON` over HTTPS. Optimized for standard browser interactions.
-- **Gateway <--> Internal Services**: Internal `gRPC` over HTTP/2 using Protobuf schemas. Ensures strict typings, generated client stubs, and multiplexed performance.
+- **Gateway <--> Internal Services**: Internal `REST/JSON` or `gRPC` over HTTP/2 using Protobuf schemas.
 - **Workflow Initiator <--> Temporal Workers**: Native `gRPC` via Temporal SDK bridging through the Temporal Cluster.
 - **Temporal Workers <--> Internal Microservices**: `gRPC` or `REST` depending on legacy integrations, executed via the Tool Router.
+- **Temporal Workers <--> MCP Registry**: `REST/JSON` over HTTP for MCP tool discovery and invocation.
 - **Temporal Workers <--> LLM Provider**: `REST/HTTPS` mapping directly to provider APIs exclusively using the standard OpenAI SDK format.
+- **External MCP Clients <--> MCP Server**: `HTTP POST JSON-RPC 2.0` + `SSE` (Model Context Protocol).
 
 ### 9.3 Component Interface Definitions (API Docs)
 

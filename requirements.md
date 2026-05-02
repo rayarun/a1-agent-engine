@@ -106,6 +106,20 @@ To contextualize the platform's requirements, the following journeys illustrate 
 
 * **Step 6:** A Senior Engineer receives the alert, reviews the Execution Trace Visualizer (showing the parallel DB and K8s investigation lanes and the Orchestrator's synthesis), and clicks **Approve (MFA)**. The team resumes, the pod is restarted, and the Orchestrator closes the PagerDuty incident.
 
+### Journey 7: External Tool Integration via MCP (Persona: Agent Creator / SRE)
+
+* **Step 1:** An Agent Creator wants to extend their agent with external capabilities (e.g., GitHub code search, filesystem access, external data sources). Instead of asking platform engineers to register new tools, they register an external MCP server endpoint (`https://github-mcp.example.com:3000`) via the Agent Studio settings.
+
+* **Step 2:** The MCP server is registered in the **MCP Registry** service per tenant. The platform automatically discovers the server's tools and caches them to avoid repeated discovery overhead.
+
+* **Step 3:** The Agent Creator adds the MCP server ID to the agent manifest under `mcp_servers: ["github-mcp-server"]`. No new platform deployment is needed; the capability is available immediately.
+
+* **Step 4:** When the agent executes, it queries the MCP Registry to discover tools (via `discover_mcp_tools` activity), augmenting the agent's tool context with externally-provided tools (named `mcp__github_mcp_server__search_code`, etc.).
+
+* **Step 5:** The agent invokes an external tool (e.g., "Search for XSS vulnerabilities in recent commits"). The ReAct loop routes the `mcp__*` tool call through the MCP Registry, which calls the external MCP server and returns the result.
+
+* **Step 6:** The SRE also wants to give external partners access to internal platform skills. They issue an MCP server token via the Admin Console, share the token and the platform's MCP endpoint with external partners. Claude Desktop and other MCP clients can now discover and invoke platform skills using the token.
+
 ## 3. Functional Requirements (FR)
 
 These requirements define the core capabilities of the platform, prioritized for an MVP to Production roadmap.
@@ -129,7 +143,9 @@ These requirements define the core capabilities of the platform, prioritized for
 | **FR14** | **P1** | **Agent Team Orchestration** | Platform supports declarative Team Manifests specifying member sub-agents, coordination strategy (parallel fan-out, sequential chain, or conditional branching on sub-agent output), and shared memory scope. The orchestrator agent decomposes the goal, dispatches sub-agents, synthesizes results, and produces a unified response. Teams are simulated in the Agent Simulator before deployment. |
 | **FR15** | **P1** | **Skill Command Interface & Hooks** | Skills are invocable via slash-command syntax (e.g., `/db-triage --target=prod-rds-01 --window=1h`) from the Agent Studio chat interface and the REST API. Arguments are validated against the skill's input schema before dispatch. The platform supports declarative pre/post-skill hooks (YAML-configured) for audit logging, cost metering, and HITL interception — without modifying skill logic. |
 | **FR16** | **P1** | **Capability Lifecycle Management** | All four tiers follow a formal state machine: `Draft → Staged → Active ↔ Paused → Archived`. State transitions are immutably logged. Deployment supports three strategies: All-at-once, Blue-Green, and Canary (10% → 25% → 100% with configurable ramp). Auto-rollback triggers if workflow success rate drops more than 10% from the prior version's baseline over 10 minutes. |
-| **FR17** | **P1** | **Cost & Quota Dashboard** | Real-time cost attribution at tenant, agent, and skill granularity: LLM inference tokens, sandbox execution time, and Vector DB operations. Budget alerts fire at 80% and 100% of the monthly allocation. Soft quota limits queue requests (returning `Retry-After`); hard limits reject with `429 QuotaExceeded`. Quota thresholds are configurable per tenant via Agent Studio settings. | 
+| **FR17** | **P1** | **Cost & Quota Dashboard** | Real-time cost attribution at tenant, agent, and skill granularity: LLM inference tokens, sandbox execution time, and Vector DB operations. Budget alerts fire at 80% and 100% of the monthly allocation. Soft quota limits queue requests (returning `Retry-After`); hard limits reject with `429 QuotaExceeded`. Quota thresholds are configurable per tenant via Agent Studio settings. |
+| **FR18** | **P1** | **MCP Client Support** | Platform SHALL support connecting to external MCP servers (HTTP + SSE transport) per tenant. Agents can reference MCP server IDs in their manifest; at runtime, tools from those servers are discovered and injected into the agent's tool context. Tool discovery is cached to avoid redundant network calls. MCP tool invocation is routed through the MCP registry service via standard Temporal activities. |
+| **FR19** | **P1** | **MCP Server Support** | Platform SHALL expose its registered skills as an MCP server endpoint (HTTP + SSE). External MCP-compatible clients (e.g., Claude Desktop) can authenticate with a hashed bearer token (scoped to a tenant), discover the platform's skills, and invoke them. MCP server support enables Agentic workflows outside the platform to access platform capabilities. |
 
 ## 4. Non-Functional Requirements (NFR)
 

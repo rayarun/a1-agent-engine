@@ -147,6 +147,7 @@ type AgentManifest struct {
 	Model          string         `json:"model"`
 	MaxIterations  int            `json:"max_iterations"`
 	MemoryBudgetMB int            `json:"memory_budget_mb"`
+	MCPServers     []string       `json:"mcp_servers,omitempty"`
 	Status         ResourceStatus `json:"status"`
 }
 

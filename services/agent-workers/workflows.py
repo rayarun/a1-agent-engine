@@ -42,6 +42,26 @@ class AgentWorkflow:
         for skill_ref in skills:
             tool_defs.append(_skill_tool_def(skill_ref["name"]))
 
+        # Discover MCP tools if configured
+        mcp_meta_map = {}
+        mcp_servers = manifest.get("mcp_servers") or []
+        if mcp_servers:
+            try:
+                mcp_tool_defs = await workflow.execute_activity(
+                    "discover_mcp_tools",
+                    args=[mcp_servers, tenant_id],
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(maximum_attempts=2),
+                )
+                # Strip __mcp_meta before passing to LLM, store in lookup map
+                for t in mcp_tool_defs:
+                    meta = t.pop("__mcp_meta", None)
+                    if meta:
+                        mcp_meta_map[t["function"]["name"]] = meta
+                tool_defs.extend(mcp_tool_defs)
+            except Exception as e:
+                workflow.logger.warning(f"MCP tool discovery failed: {e}")
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
@@ -107,6 +127,15 @@ class AgentWorkflow:
                             args_dict.get("code", ""),
                             start_to_close_timeout=timedelta(seconds=60),
                             retry_policy=RetryPolicy(maximum_attempts=3),
+                        )
+                    elif tool_name.startswith("mcp__"):
+                        # Route MCP tool calls through the MCP registry
+                        meta = mcp_meta_map.get(tool_name, {})
+                        result = await workflow.execute_activity(
+                            "invoke_mcp_tool",
+                            args=[meta.get("server_id"), meta.get("tool_name"), args_dict, tenant_id],
+                            start_to_close_timeout=timedelta(seconds=60),
+                            retry_policy=RetryPolicy(maximum_attempts=2),
                         )
                     else:
                         # Dispatch as a skill via skill-dispatcher
