@@ -439,6 +439,424 @@ type AgentManifest struct {
 
 ---
 
+## 1.4 Phase 5: Complete Observability Implementation Details
+
+Phase 5 introduces comprehensive observability, cost tracking, and execution monitoring across the platform. This section documents the concrete implementation patterns, database schemas, API contracts, and frontend architecture for Phase 5 features.
+
+### System Design Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Admin Console (Frontend)                  │
+│  ┌──────────────┬──────────────┬──────────────────────────┐  │
+│  │  /cost       │ /executions  │ /executions/[id]         │  │
+│  │  (USD costs) │  (list)      │ (timeline + polling)     │  │
+│  └──────┬───────┴──────┬───────┴──────────────┬───────────┘  │
+│         │              │                      │              │
+└─────────┼──────────────┼──────────────────────┼──────────────┘
+          │ HTTP REST    │ HTTP REST            │ 1s polling
+          │              │                      │
+┌─────────▼──────────────▼──────────────────────▼──────────────┐
+│              Admin API Gateway (Backend)                      │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  Authentication Middleware (Bearer Token)                │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  Cost Handlers:                                          │ │
+│  │  - getCostSummary() → DB + Pricing Model → cost_usd     │ │
+│  │  - getCostByTenant() → DB + Pricing → cost_usd breakdown│ │
+│  └──────────────────────────────────────────────────────────┘ │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  Execution Handlers:                                     │ │
+│  │  - listExecutions() → workflow_executions table          │ │
+│  │  - getExecution() → DB + Temporal fallback               │ │
+│  │  - getExecutionEvents() → Temporal QueryWorkflow()       │ │
+│  └──────────────────────────────────────────────────────────┘ │
+└─────────┬──────────────┬──────────────────────┬──────────────┘
+          │ SQL Query    │ DescribeWorkflow()   │ QueryWorkflow()
+          │              │                      │
+┌─────────▼──────┐  ┌────▼──────────────────────▼──────────────┐
+│  PostgreSQL DB │  │     Temporal Server                      │
+│  ┌────────────┐│  │  ┌──────────────────────────────────┐   │
+│  │ cost_events││  │  │  AgentWorkflow Executions        │   │
+│  │ (tokens)   ││  │  │  - Status tracking               │   │
+│  │ platform_  ││  │  │  - Event stream                  │   │
+│  │   config   ││  │  │  - QueryWorkflow("get_events")   │   │
+│  │ (pricing)  ││  │  └──────────────────────────────────┘   │
+│  │ workflow_  ││  │                                          │
+│  │  executions││  │                                          │
+│  └────────────┘│  │                                          │
+└────────────────┘  └──────────────────────────────────────────┘
+```
+
+### Execution Tracking Architecture
+
+#### workflow_executions Table
+
+Tracks all workflow execution instances for efficient querying without requiring Temporal SDK calls:
+
+**Schema:**
+```sql
+CREATE TABLE workflow_executions (
+    workflow_id      TEXT PRIMARY KEY,         -- agent-wf-{agent_id}-{session_id}
+    tenant_id        TEXT NOT NULL,            -- For multi-tenancy isolation
+    agent_id         TEXT,                     -- Agent that ran
+    status           TEXT DEFAULT 'RUNNING',   -- RUNNING | COMPLETED | FAILED
+    start_time       TIMESTAMPTZ NOT NULL,     -- When workflow started
+    end_time         TIMESTAMPTZ,              -- When workflow completed
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_workflow_executions_tenant_time 
+    ON workflow_executions(tenant_id, start_time DESC);
+CREATE INDEX idx_workflow_executions_status 
+    ON workflow_executions(status, start_time DESC);
+CREATE INDEX idx_workflow_executions_agent 
+    ON workflow_executions(agent_id, start_time DESC);
+```
+
+**Population Strategy:**
+- Workflows populate this table when they start/end (activity writes)
+- Used as primary source for list/detail queries (O(log n) with index, ~2-5ms)
+- Temporal used as fallback if workflow not in table yet (~40ms)
+- Enables efficient pagination and filtering for Admin API
+
+#### Temporal Query Patterns
+
+**Pattern 1: Describe Workflow Execution (Status & Timing)**
+```go
+desc, err := h.TemporalClient.DescribeWorkflowExecution(ctx, workflowID, "")
+// Returns: Status, StartTime, CloseTime, Metadata
+// Latency: ~40ms
+```
+
+**Pattern 2: Query Workflow Events (Live Stream)**
+```go
+val, err := h.TemporalClient.QueryWorkflow(ctx, workflowID, "", "get_events")
+// Requires: Workflow implements "get_events" query handler
+// Returns: []AgentEvent from workflow state
+// Latency: ~40-100ms
+```
+
+**Pattern 3: Fallback Strategy (DB First)**
+```
+1. Try database (workflow_executions) → fast path (~2-5ms)
+2. If not found → Try Temporal → slower path (~40ms)
+3. If both fail → Return 404
+```
+
+### Pricing Model Architecture
+
+#### Storage Structure
+
+**Location:** `platform_config` table (existing)  
+**Key:** `"pricing_model"`  
+**Format:** JSON object mapping model IDs to per-1M-token costs in USD
+
+```json
+{
+  "claude-3-5-sonnet-20241022": 3.0,
+  "claude-opus-4-20250514": 15.0,
+  "claude-opus-4": 15.0,
+  "gpt-4-turbo": 10.0
+}
+```
+
+#### Retrieval & Calculation
+
+**Function: getPricingModel()**
+```go
+func (h *AdminHandler) getPricingModel(ctx context.Context) map[string]float64 {
+    // 1. Query platform_config table for key="pricing_model"
+    // 2. Unmarshal JSON
+    // 3. Return map or default fallback ($5/1M tokens if missing)
+}
+```
+
+**Function: calculateCost()**
+```go
+func (h *AdminHandler) calculateCost(ctx context.Context, 
+    tokensIn, tokensOut int64, modelID string) float64 {
+    
+    pricing := h.getPricingModel(ctx)
+    pricePerM := pricing[modelID]
+    if pricePerM == 0 {
+        pricePerM = 5.0  // default fallback
+    }
+    
+    totalTokens := float64(tokensIn + tokensOut)
+    return (totalTokens / 1000000.0) * pricePerM
+}
+```
+
+### Frontend Architecture
+
+#### Admin Console Execution Detail Page: Live Polling
+
+**State Management:**
+```typescript
+const [pollingInterval, setPollingInterval] = useState<number | false>(1000);
+
+const { data: execution } = useQuery({
+  queryKey: ["execution", sessionId],
+  queryFn: () => adminApi.getExecution(sessionId),
+  refetchInterval: pollingInterval,
+});
+
+useEffect(() => {
+  if (execution?.status !== "RUNNING") {
+    setPollingInterval(false);  // Stop polling on completion
+  }
+}, [execution?.status]);
+```
+
+**Timeline Rendering:**
+```
+Event nodes in horizontal flow:
+💭 ─── 🔧 ─── ✅ ─── 💬 ─── 🏁
+thinking tool_call result text done
+
+Detail cards below timeline (collapsible):
+- Full JSON for tool args/results
+- Full text for thinking/messages
+- Error highlighting in red
+```
+
+**Performance Characteristics:**
+- Initial load: ~500-1000ms (API + render)
+- Polling update: ~300-500ms (refetch + rerender)
+- No flickering (React Query handles stale data automatically)
+- Memory stable (auto-cleanup on unmount)
+
+#### Admin Console Cost Page: USD Display
+
+**Summary Stats Calculation:**
+```typescript
+const summaryStats = useMemo(() => {
+  const totalCost = costs.reduce((sum, c) => sum + (c.cost_usd || 0), 0);
+  return { totalCostUSD: totalCost, ... };
+}, [costs]);
+```
+
+**Table Display:**
+```
+Each row: Tenant | Tokens In | Tokens Out | Sandbox | Cost (USD)
+Cost formatted with 2 decimals: $${(cost.cost_usd || 0).toFixed(2)}
+```
+
+**Responsive Grid:**
+```css
+/* Mobile: 1 column */
+grid-cols-1
+
+/* Tablet: 2 columns */
+md:grid-cols-2
+
+/* Desktop: 5 columns (Total Tokens, Sandbox, Most Active, Total Cost, Tenants) */
+lg:grid-cols-5
+```
+
+### Admin API Contracts
+
+#### GET /api/v1/admin/cost
+
+**Query Parameters:**
+- `period`: "7d", "30d", "90d" (default: "30d")
+
+**Response:**
+```json
+{
+  "costs": [
+    {
+      "tenant_id": "acme-corp",
+      "tokens_in": 1000000,
+      "tokens_out": 500000,
+      "sandbox_ms": 5000,
+      "cost_usd": 4.50
+    }
+  ],
+  "period": "30d",
+  "count": 1
+}
+```
+
+#### GET /api/v1/admin/executions
+
+**Query Parameters:**
+- `limit`: 1-100 (default: 20)
+- `tenant_id`: Filter by tenant
+- `status`: RUNNING | COMPLETED | FAILED | CANCELLED
+
+**Response:**
+```json
+{
+  "executions": [
+    {
+      "session_id": "agent-wf-agent-123-session-456",
+      "tenant_id": "acme-corp",
+      "agent_id": "agent-123",
+      "status": "COMPLETED",
+      "start_time": "2026-04-27T10:30:00Z",
+      "end_time": "2026-04-27T10:32:15Z",
+      "duration_ms": 135000,
+      "event_count": 12
+    }
+  ],
+  "count": 1
+}
+```
+
+#### GET /api/v1/admin/executions/{id}
+
+**Response:**
+```json
+{
+  "session_id": "agent-wf-agent-123-session-456",
+  "status": "COMPLETED",
+  "start_time": "2026-04-27T10:30:00Z",
+  "end_time": "2026-04-27T10:32:15Z",
+  "duration_ms": 135000,
+  "events": [
+    {
+      "type": "thinking",
+      "content": "I need to analyze the user's request..."
+    },
+    {
+      "type": "tool_call",
+      "name": "search",
+      "args": "{\"query\": \"...\"}"
+    },
+    {
+      "type": "tool_result",
+      "result": "{\"results\": [...]}"
+    }
+  ]
+}
+```
+
+### Data Flow Diagrams
+
+#### Cost Calculation Flow
+```
+Frontend: User clicks /cost
+         │
+         ├─→ API: GET /api/v1/admin/cost?period=30d
+                   │
+                   ├─→ DB: SELECT SUM(tokens_in), SUM(tokens_out)
+                   │       FROM cost_events WHERE time > NOW() - INTERVAL
+                   │
+                   ├─→ Pricing: Load from platform_config
+                   │
+                   ├─→ Calculate: (tokens / 1M) * price
+                   │
+                   └─→ Response: { costs[], cost_usd: [...] }
+         │
+         └─→ Frontend: Display summary cards + tables
+```
+
+#### Execution Detail Flow
+```
+Frontend: User navigates to /executions/[id]
+         │
+         ├─→ useQuery({ refetchInterval: 1000 })
+         │   │
+         │   ├─→ API: GET /api/v1/admin/executions/{id}
+         │   │         │
+         │   │         ├─→ DB: SELECT * FROM workflow_executions
+         │   │         │       WHERE workflow_id = $1
+         │   │         │
+         │   │         ├─→ Temporal: DescribeWorkflowExecution()
+         │   │         │             + QueryWorkflow("get_events")
+         │   │         │
+         │   │         └─→ Response: { status, events: [...] }
+         │   │
+         │   └─→ (if status !== RUNNING) stop polling
+         │
+         └─→ Frontend: Render timeline + event details
+```
+
+### Error Handling Strategy
+
+#### Temporal Unavailable
+```
+1. Query workflow_executions table (primary)
+2. Fall back to Temporal if needed
+3. Return 404 if both unavailable
+```
+
+#### Missing Pricing Model
+```
+1. Try load from platform_config
+2. Use default ($5/1M tokens)
+3. Never fail cost calculation
+```
+
+#### Invalid Filters
+```
+1. Ignore invalid status values
+2. Use empty tenant_id as "all tenants"
+3. Cap limit to 100, min 1
+```
+
+### Performance Optimization
+
+#### Query Performance
+- **Indexes:** All list queries use indexed lookups on (tenant_id, start_time DESC)
+- **Filtering:** Applied at DB level, not in application
+- **Pagination:** Limit enforced in query (max 100 rows)
+
+#### Frontend Performance
+- **React Query:** Automatic caching and deduplication
+- **Polling:** Stops automatically on workflow completion
+- **Memoization:** Summary stats use useMemo to prevent recalculation
+
+#### API Performance
+- **Response time:** All endpoints <100ms typical
+- **Concurrent requests:** No locking, safe for parallel requests
+- **Memory:** Streaming used for large result sets
+
+### Security Considerations (Phase 5)
+
+#### Authentication
+- Bearer token required on all admin endpoints
+- Validated in middleware before handler
+
+#### Authorization
+- Single admin role for Phase 5
+- Phase 6+: Role-based access control (RBAC) for cost viewers vs. admins
+
+#### Data Isolation
+- Multi-tenancy via tenant_id in all queries
+- RLS enforced on PostgreSQL level
+- Pricing model visibility restricted to admins only
+
+#### Sensitive Data
+- Pricing model not exposed to non-admins
+- Execution events may be redacted for non-owning tenants (future)
+
+### Monitoring & Observability (Phase 5)
+
+#### Metrics to Track
+- Cost per tenant (daily/monthly aggregates)
+- Execution success rate (COMPLETED / total)
+- Average execution duration
+- Polling frequency impact on API load
+
+#### Logs to Collect
+- Admin API endpoint access and latency
+- Temporal connection errors
+- Database query performance (slow queries >100ms)
+- Pricing model changes and reloads
+
+#### Alerts to Set
+- Execution failure spike (>10% failure rate)
+- Cost threshold exceeded per tenant
+- Admin API latency degradation (p99 > 500ms)
+- Temporal connection loss
+
+---
+
 ## 2. Physical Architecture (AWS Native)
 Maps the logical components to an AWS cloud-native environment, utilizing managed services.
 
