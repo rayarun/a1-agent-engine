@@ -41,3 +41,8 @@ Thumbs.db
 # Logs
 *.log
 zscaler.pem
+
+# Blog posts (drafts, local work)
+BLOG_POST_*.md
+blog-drafts/
+Untitled*.excalidraw
