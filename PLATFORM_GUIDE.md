@@ -303,25 +303,7 @@ Description: "Comprehensive cookbook for building SRE and DevOps agents. Include
 
 ---
 
-### 11. System Tools & Skills
-
-**Purpose:** Manage globally available tools and skills
-
-**Key Responsibilities:**
-- Define mutating vs. read-only operations
-- Set HITL approval requirements
-- Configure tool sandboxing and resource limits
-- Monitor tool execution metrics
-
-**HITL (Human-In-The-Loop) Approval:**
-- Mutating tools require explicit approval
-- Approvers review context and authorize execution
-- Audit trail of all approvals
-- Configurable approval workflows
-
----
-
-### 12. Audit Log
+### 11. Audit Log
 
 **Purpose:** Complete audit trail of platform operations
 
