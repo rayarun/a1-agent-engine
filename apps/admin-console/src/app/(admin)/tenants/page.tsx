@@ -4,11 +4,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import Link from "next/link";
 import { adminApi } from "@/lib/api";
-import { Loader2, AlertCircle, Plus, ChevronRight } from "lucide-react";
+import { Loader2, AlertCircle, Plus, ChevronRight, Trash2 } from "lucide-react";
 
 export default function TenantsPage() {
   const queryClient = useQueryClient();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ tenantId: string; displayName: string } | null>(null);
   const [createForm, setCreateForm] = useState({
     tenant_id: "",
     display_name: "",
@@ -48,6 +49,17 @@ export default function TenantsPage() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async (tenantId: string) => {
+      const result = await adminApi.deleteTenant(tenantId);
+      return result;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tenants"] });
+      setDeleteConfirm(null);
+    },
+  });
+
   function handleCreateSubmit(e: React.FormEvent) {
     e.preventDefault();
     createTenantMutation.mutate(createForm);
@@ -61,6 +73,16 @@ export default function TenantsPage() {
 
   function handleActivate(tenantId: string) {
     statusMutation.mutate({ tenantId, status: "active" });
+  }
+
+  function handleDelete(tenantId: string, displayName: string) {
+    setDeleteConfirm({ tenantId, displayName });
+  }
+
+  function confirmDelete() {
+    if (deleteConfirm) {
+      deleteMutation.mutate(deleteConfirm.tenantId);
+    }
   }
 
   return (
@@ -149,6 +171,13 @@ export default function TenantsPage() {
                           Activate
                         </button>
                       )}
+                      <button
+                        onClick={() => handleDelete(tenant.tenant_id, tenant.display_name)}
+                        disabled={deleteMutation.isPending}
+                        className="px-2 py-1 rounded text-xs text-red-500 hover:bg-red-500/10 disabled:opacity-50 flex items-center gap-1"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -272,6 +301,54 @@ export default function TenantsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-card border border-border rounded-lg p-6 max-w-md w-full mx-4">
+            <h2 className="text-lg font-semibold mb-2">Delete Tenant</h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              Are you sure you want to permanently delete <span className="font-mono font-semibold">{deleteConfirm.displayName}</span>?
+            </p>
+            <div className="bg-destructive/10 border border-destructive/20 rounded p-3 mb-4">
+              <p className="text-xs text-destructive">
+                ⚠️ This action cannot be undone. All associated agents, skills, knowledge graphs, and data will be permanently removed.
+              </p>
+            </div>
+
+            {deleteMutation.isError && (
+              <div className="flex items-center gap-2 p-3 bg-destructive/10 text-destructive text-sm rounded-md mb-4">
+                <AlertCircle className="h-4 w-4" />
+                <span>
+                  {deleteMutation.error instanceof Error
+                    ? deleteMutation.error.message
+                    : "Failed to delete tenant"}
+                </span>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                onClick={confirmDelete}
+                disabled={deleteMutation.isPending}
+                className="flex-1 px-4 py-2 bg-destructive text-destructive-foreground rounded-md text-sm font-medium hover:bg-destructive/90 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {deleteMutation.isPending && (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                )}
+                Permanently Delete
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeleteConfirm(null)}
+                disabled={deleteMutation.isPending}
+                className="flex-1 px-4 py-2 bg-muted text-muted-foreground rounded-md text-sm font-medium hover:bg-muted/80"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -116,6 +116,8 @@ class AgentWorkflow:
 
         # 2. ReAct reasoning loop
         final_answer = None
+        total_tokens_in = 0
+        total_tokens_out = 0
 
         for i in range(max_iterations):
             workflow.logger.info(f"Iteration {i + 1}/{max_iterations}")
@@ -229,6 +231,10 @@ class AgentWorkflow:
                 tool_calls = decision.get("tool_calls")
                 continue_loop = decision.get("continue_loop", False)
 
+                # Accumulate token usage for cost tracking
+                total_tokens_in += decision.get("tokens_in", 0)
+                total_tokens_out += decision.get("tokens_out", 0)
+
                 # DEBUG: Log the full decision
                 workflow.logger.info(f"[WORKFLOW] Decision from activity: keys={list(decision.keys())}, hitl_pending={decision.get('hitl_pending')}")
 
@@ -323,7 +329,14 @@ class AgentWorkflow:
         self._emit({"type": "text", "content": final_answer})
         self._emit({"type": "done"})
 
-        # 3. Fire-and-forget store_memory (start without awaiting)
+        # 3. Fire-and-forget record_cost_event (start without awaiting)
+        workflow.start_activity(
+            "record_cost_event",
+            args=[tenant_id, agent_id, total_tokens_in, total_tokens_out, 0],
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+
+        # 4. Fire-and-forget store_memory (start without awaiting)
         workflow.start_activity(
             "store_memory",
             args=[f"Observation for '{prompt}': {final_answer}", agent_id],

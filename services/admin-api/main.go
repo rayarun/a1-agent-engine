@@ -68,12 +68,13 @@ func main() {
 	mux.HandleFunc("GET /health", handler.HandleHealth)
 	mux.Handle("POST /api/v1/admin/auth/verify", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleAuthVerify)))
 
-	// Tenant Management
-	mux.Handle("GET /api/v1/admin/tenants", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleListTenants)))
-	mux.Handle("POST /api/v1/admin/tenants", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleCreateTenant)))
-	mux.Handle("GET /api/v1/admin/tenants/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetTenant)))
+	// Tenant Management - note: DELETE must come before GET {id} to avoid path matching issues
+	mux.Handle("DELETE /api/v1/admin/tenants/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleDeleteTenant)))
 	mux.Handle("PUT /api/v1/admin/tenants/{id}/quota", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleUpdateTenantQuota)))
 	mux.Handle("PUT /api/v1/admin/tenants/{id}/status", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleUpdateTenantStatus)))
+	mux.Handle("GET /api/v1/admin/tenants/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetTenant)))
+	mux.Handle("GET /api/v1/admin/tenants", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleListTenants)))
+	mux.Handle("POST /api/v1/admin/tenants", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleCreateTenant)))
 
 	// LLM Configuration
 	mux.Handle("GET /api/v1/admin/llm/config", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetLLMConfig)))

@@ -24,7 +24,7 @@ export default function DashboardPage() {
         <div className="bg-card border border-border rounded-lg p-6">
           <div className="text-sm text-muted-foreground">Active Tenants</div>
           <div className="text-3xl font-bold mt-2">
-            {isLoading ? "-" : tenantsData?.count || 0}
+            {isLoading ? "-" : tenantsData?.tenants?.filter((t: any) => t.status === "active").length || 0}
           </div>
         </div>
 

@@ -136,6 +136,12 @@ export const adminApi = {
     return response.json();
   },
 
+  async deleteTenant(tenantId: string): Promise<any> {
+    const response = await request("DELETE", `/api/v1/admin/tenants/${tenantId}`);
+    if (!response.ok) throw new Error("Failed to delete tenant");
+    return response.json();
+  },
+
   async getLLMConfig(): Promise<any> {
     const response = await request("GET", "/api/v1/admin/llm/config");
     if (!response.ok) throw new Error("Failed to fetch LLM config");

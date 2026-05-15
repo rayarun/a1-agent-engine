@@ -295,6 +295,87 @@ func (h *AdminHandler) HandleUpdateTenantStatus(w http.ResponseWriter, r *http.R
 	json.NewEncoder(w).Encode(updated)
 }
 
+// HandleDeleteTenant completely removes a tenant and all its associated data.
+func (h *AdminHandler) HandleDeleteTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("id")
+	if tenantID == "" {
+		http.Error(w, "tenant_id is required", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// Delete all tenant data in transaction
+	tx, err := h.DB.Begin(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Check if tenant exists first
+	var exists bool
+	err = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM tenant_settings WHERE tenant_id = $1)`, tenantID).Scan(&exists)
+	if err != nil || !exists {
+		http.Error(w, "Tenant not found", http.StatusNotFound)
+		return
+	}
+
+	// Delete all tenant-scoped data (order matters due to foreign keys)
+	deleteQueries := []string{
+		// Delete knowledge graph related data first (cascading deletes should handle kg_edges/kg_nodes)
+		`DELETE FROM kg_edges WHERE tenant_id = $1`,
+		`DELETE FROM kg_nodes WHERE tenant_id = $1`,
+		`DELETE FROM kg_graphs WHERE tenant_id = $1`,
+		// Delete agent-related data
+		`DELETE FROM agent_memories WHERE tenant_id = $1`,
+		`DELETE FROM sub_agent_contracts WHERE tenant_id = $1`,
+		`DELETE FROM agents WHERE tenant_id = $1`,
+		// Delete skills
+		`DELETE FROM skill_manifests WHERE tenant_id = $1`,
+		`DELETE FROM skills WHERE tenant_id = $1`,
+		// Delete tools
+		`DELETE FROM mcp_tool_cache WHERE tenant_id = $1`,
+		`DELETE FROM tool_specs WHERE tenant_id = $1`,
+		`DELETE FROM tools WHERE tenant_id = $1`,
+		// Delete workflow/execution data
+		`DELETE FROM workflow_executions WHERE tenant_id = $1`,
+		`DELETE FROM lifecycle_events WHERE tenant_id = $1`,
+		// Delete cost and usage data
+		`DELETE FROM cost_events WHERE tenant_id = $1`,
+		`DELETE FROM cost_events_default WHERE tenant_id = $1`,
+		// Delete MCP data
+		`DELETE FROM mcp_tokens WHERE tenant_id = $1`,
+		`DELETE FROM mcp_servers WHERE tenant_id = $1`,
+		// Delete idempotency keys
+		`DELETE FROM idempotency_keys WHERE tenant_id = $1`,
+		// Delete tenant access config
+		`DELETE FROM tenant_model_access WHERE tenant_id = $1`,
+		// Finally delete tenant settings
+		`DELETE FROM tenant_settings WHERE tenant_id = $1`,
+	}
+
+	for _, query := range deleteQueries {
+		_, err := tx.Exec(r.Context(), query, tenantID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error deleting from tenant %s: %v (query: %s)\n", tenantID, err, query)
+			// Continue with other deletes rather than fail completely
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(r.Context()); err != nil {
+		http.Error(w, "Failed to commit deletion", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"message":   "Tenant deleted successfully",
+		"tenant_id": tenantID,
+	})
+}
+
 // HandleGetLLMConfig proxies to LLM Gateway and returns current config.
 func (h *AdminHandler) HandleGetLLMConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

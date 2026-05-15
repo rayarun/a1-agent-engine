@@ -330,6 +330,11 @@ async def pydantic_ai_reasoning_step(
         # Convert PydanticAI response to our AgentDecision model
         decision = await convert_response_to_decision(response, mcp_tools)
 
+        # Capture token usage for cost tracking
+        usage = response.usage()
+        tokens_in = usage.input_tokens if usage else 0
+        tokens_out = usage.output_tokens if usage else 0
+
         result = {
             "final_answer": decision.final_answer,
             "tool_calls": [tc.model_dump() for tc in decision.tool_calls],
@@ -339,6 +344,8 @@ async def pydantic_ai_reasoning_step(
             "hitl_approval_id": decision.hitl_approval_id,
             "hitl_tool_name": decision.hitl_tool_name,
             "hitl_tool_args": decision.hitl_tool_args,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
         }
 
         # Log what we're actually returning
