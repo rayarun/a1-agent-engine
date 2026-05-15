@@ -344,6 +344,7 @@ class AgentWorkflow:
         self._emit({"type": "done"})
 
         # 3. Fire-and-forget record_cost_event (start without awaiting)
+        workflow.logger.info(f"Firing record_cost_event: tenant_id={tenant_id}, agent_id={agent_id}, tokens_in={total_tokens_in}, tokens_out={total_tokens_out}")
         workflow.start_activity(
             "record_cost_event",
             args=[tenant_id, agent_id, total_tokens_in, total_tokens_out, 0],

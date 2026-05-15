@@ -345,9 +345,13 @@ async def pydantic_ai_reasoning_step(
         decision = await convert_response_to_decision(response, mcp_tools)
 
         # Capture token usage for cost tracking
+        tokens_in = 0
+        tokens_out = 0
         usage = response.usage()
-        tokens_in = usage.input_tokens if usage else 0
-        tokens_out = usage.output_tokens if usage else 0
+        if usage:
+            # PydanticAI Usage object may have different attribute names than OpenAI
+            tokens_in = getattr(usage, 'input_tokens', getattr(usage, 'prompt_tokens', 0))
+            tokens_out = getattr(usage, 'output_tokens', getattr(usage, 'completion_tokens', 0))
 
         result = {
             "final_answer": decision.final_answer,
@@ -383,7 +387,8 @@ async def pydantic_ai_reasoning_step(
                     f.write(f"[ERROR] MISSING Recommended Skills section!\n")
                 f.flush()
 
-        logging.info(f"Returning decision with {len(result)} fields")
+        logging.info(f"Returning decision with {len(result)} fields: {list(result.keys())}")
+        logging.info(f"Token usage: tokens_in={tokens_in}, tokens_out={tokens_out}")
         return result
 
     except Exception as e:
