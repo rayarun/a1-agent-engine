@@ -55,3 +55,4 @@ add_copyright_headers.py
 PDF_GENERATION_QUICKSTART.md
 SCREENSHOT_MAPPINGS.md
 SCREENSHOTS_INDEX.md
+infra/local/temporal_data/
