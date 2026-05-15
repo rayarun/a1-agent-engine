@@ -1,42 +1,43 @@
 image:
-  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/skill-dispatcher
+  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/bash-executor
   tag: latest
   pullPolicy: IfNotPresent
 
 replicaCount: 1
-containerPort: 8085
+containerPort: 8092
 
 service:
   enabled: true
   type: ClusterIP
-  port: 8085
+  port: 8092
 
 config:
-  WORKFLOW_INITIATOR_URL: "http://workflow-initiator:8081"
-  KG_GATEWAY_URL: "http://kg-service:8093"
   LOG_LEVEL: "info"
-
-secretRefs: []
+  PORT: "8092"
+  MAX_MEMORY_MB: "512"
+  MAX_CPU_CORES: "2"
+  MAX_TIMEOUT_SECONDS: "3600"
+  MAX_OUTPUT_BYTES: "67108864"
 
 resources:
   requests:
-    cpu: "50m"
-    memory: "64Mi"
-  limits:
     cpu: "200m"
     memory: "256Mi"
+  limits:
+    cpu: "1000m"
+    memory: "1024Mi"
 
 readinessProbe:
   httpGet:
     path: /health
-    port: 8085
+    port: 8092
   initialDelaySeconds: 5
   periodSeconds: 10
 
 livenessProbe:
   httpGet:
     path: /health
-    port: 8085
+    port: 8092
   initialDelaySeconds: 15
   periodSeconds: 20
 

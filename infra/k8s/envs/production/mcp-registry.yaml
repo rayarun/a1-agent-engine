@@ -1,0 +1,38 @@
+image:
+  tag: "placeholder"
+
+replicaCount: 2
+
+config:
+  LOG_LEVEL: "info"
+  PORT: "8090"
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "250m"
+    memory: "256Mi"
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - mcp-registry
+          topologyKey: kubernetes.io/hostname
+
+ingress:
+  enabled: false

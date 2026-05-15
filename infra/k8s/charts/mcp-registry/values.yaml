@@ -1,22 +1,24 @@
 image:
-  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/skill-dispatcher
+  repository: CHANGE_ME_ECR_ACCOUNT.dkr.ecr.CHANGE_ME_REGION.amazonaws.com/a1/mcp-registry
   tag: latest
   pullPolicy: IfNotPresent
 
 replicaCount: 1
-containerPort: 8085
+containerPort: 8090
 
 service:
   enabled: true
   type: ClusterIP
-  port: 8085
+  port: 8090
 
 config:
-  WORKFLOW_INITIATOR_URL: "http://workflow-initiator:8081"
-  KG_GATEWAY_URL: "http://kg-service:8093"
   LOG_LEVEL: "info"
+  PORT: "8090"
 
-secretRefs: []
+secretRefs:
+  - envVarName: DATABASE_URL
+    secretName: postgres-credentials
+    secretKey: url
 
 resources:
   requests:
@@ -29,14 +31,14 @@ resources:
 readinessProbe:
   httpGet:
     path: /health
-    port: 8085
+    port: 8090
   initialDelaySeconds: 5
   periodSeconds: 10
 
 livenessProbe:
   httpGet:
     path: /health
-    port: 8085
+    port: 8090
   initialDelaySeconds: 15
   periodSeconds: 20
 

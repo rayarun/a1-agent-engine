@@ -1,0 +1,38 @@
+image:
+  tag: "placeholder"
+
+replicaCount: 2
+
+config:
+  LOG_LEVEL: "info"
+  LLM_GATEWAY_URL: "http://llm-gateway:8083"
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - kg-service
+          topologyKey: kubernetes.io/hostname
+
+ingress:
+  enabled: false

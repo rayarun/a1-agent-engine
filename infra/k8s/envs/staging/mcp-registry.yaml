@@ -4,17 +4,16 @@ image:
 replicaCount: 1
 
 config:
-  WORKFLOW_INITIATOR_URL: "http://workflow-initiator:8081"
-  KG_GATEWAY_URL: "http://kg-service:8093"
   LOG_LEVEL: "debug"
+  PORT: "8090"
 
 resources:
   requests:
     cpu: "50m"
     memory: "64Mi"
   limits:
-    cpu: "200m"
-    memory: "256Mi"
+    cpu: "150m"
+    memory: "200Mi"
 
 hpa:
   enabled: false

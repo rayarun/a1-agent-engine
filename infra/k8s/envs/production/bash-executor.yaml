@@ -1,0 +1,42 @@
+image:
+  tag: "placeholder"
+
+replicaCount: 2
+
+config:
+  LOG_LEVEL: "info"
+  PORT: "8092"
+  MAX_MEMORY_MB: "1024"
+  MAX_CPU_CORES: "4"
+  MAX_TIMEOUT_SECONDS: "7200"
+  MAX_OUTPUT_BYTES: "67108864"
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+  limits:
+    cpu: "2000m"
+    memory: "2048Mi"
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - bash-executor
+          topologyKey: kubernetes.io/hostname
+
+ingress:
+  enabled: false

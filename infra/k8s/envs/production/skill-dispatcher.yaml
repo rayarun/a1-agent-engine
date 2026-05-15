@@ -5,6 +5,7 @@ replicaCount: 2
 
 config:
   WORKFLOW_INITIATOR_URL: "http://workflow-initiator:8081"
+  KG_GATEWAY_URL: "http://kg-service:8093"
   LOG_LEVEL: "info"
 
 resources:
