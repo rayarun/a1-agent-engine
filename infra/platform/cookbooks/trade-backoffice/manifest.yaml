@@ -1,0 +1,159 @@
+name: "trade-backoffice"
+version: "1.0.0"
+description: |
+  Trade Backoffice Operations Automation for Indian Financial Institutions
+
+  A comprehensive cookbook providing five specialized agents for end-to-end trade processing automation:
+
+  • Settlement Agent: T+1 settlement orchestration with NSE/BSE, NSCCL, CDSL/NSDL, and RBI payment gateway coordination
+  • Reconciliation Agent: Real-time EOD reconciliation across multiple exchanges and venues
+  • Margin Agent: Automated margin utilization monitoring and collection workflows
+  • Corporate Actions Agent: Dividend, bonus, and split processing automation
+  • Regulatory Reporting Agent: T+1 compliance reporting to NSE/BSE with position limit monitoring
+
+  Designed for Indian brokerages, banks, and financial institutions operating under SEBI, RBI, and NSE/BSE regulations.
+
+domain: "fintech"
+
+creates:
+  knowledge_graphs:
+    - name: "Trade Settlement Domain"
+      description: "Domain knowledge graph for trade lifecycle, settlement obligations, client positions, and market participants"
+      schema_file: "kg-schema.yaml"
+      seed_data_file: "seed-kg.yaml"
+
+  agents:
+    - file: "agents/settlement-agent.yaml"
+      description: |
+        T+1 Settlement Orchestration Agent
+
+        Handles autonomous settlement processing: trade matching with NSE/BSE, netting calculations via NSCCL/ICCL,
+        depository instructions to CDSL/NSDL, and fund settlement via RBI payment gateway. Detects and escalates
+        settlement fails to the risk team. Generates complete audit trail for SEBI examination.
+
+    - file: "agents/reconciliation-agent.yaml"
+      description: |
+        Real-Time Trade Reconciliation Agent
+
+        Continuous reconciliation across NSE/BSE/MCX trade feeds, broker settlement records, and client portfolios.
+        Auto-resolves routine timing and rounding discrepancies. Flags material mismatches for manual review.
+        Reduces EOD reconciliation latency from 2 hours to <10 minutes.
+
+    - file: "agents/margin-agent.yaml"
+      description: |
+        Real-Time Margin Monitoring and Collection Agent
+
+        Monitors client margin utilization against NSE/BSE requirements per segment (cash, F&O, commodity).
+        Triggers automated margin calls when thresholds exceeded. Tracks collection status and escalates
+        to risk/credit teams if collections delayed. Prevents exchange-initiated trading halts.
+
+    - file: "agents/corporate-actions-agent.yaml"
+      description: |
+        Automated Corporate Actions Processing Agent
+
+        Discovers dividend, bonus, and stock split announcements from CDSL/NSDL. Auto-applies to affected
+        client portfolios. Calculates dividend amounts and bonus quantities. Coordinates ex-date processing.
+        Eliminates missed corporate actions and manual reconciliation effort.
+
+    - file: "agents/regulatory-reporting-agent.yaml"
+      description: |
+        T+1 Regulatory Compliance and Reporting Agent
+
+        Aggregates daily trade volumes by segment, client type, and geography. Prepares NSE/BSE T+1 compliance
+        submissions. Real-time detection of position limit breaches and circuit breaker violations.
+        Auto-escalates regulatory infractions to compliance team.
+
+mcp_recommendations:
+  - name: "NSE Trade Feed API"
+    description: "Real-time NSE trade executions and market data"
+    required: true
+  - name: "BSE Trade Feed API"
+    description: "Real-time BSE trade executions and market data"
+    required: true
+  - name: "NSCCL/ICCL Clearing House"
+    description: "Netting, settlement parameters, clearing operations"
+    required: true
+  - name: "CDSL Depository"
+    description: "Securities settlement, account management, corporate actions"
+    required: true
+  - name: "NSDL Depository"
+    description: "Securities settlement, account management, corporate actions"
+    required: true
+  - name: "RBI Payment Gateway"
+    description: "Settlement fund transfers, liquidity management"
+    required: true
+  - name: "Slack / Teams"
+    description: "Risk and compliance team alert notifications"
+    required: false
+  - name: "Email Gateway"
+    description: "Client margin call and corporate action notifications"
+    required: false
+  - name: "SEBI Reporting Portal"
+    description: "Automated regulatory submission and audit trail"
+    required: false
+
+variables:
+  - name: "org_name"
+    description: "Your organization/broker name"
+    default: "My Brokerage"
+    type: "string"
+
+  - name: "broker_code"
+    description: "NSE/BSE broker code"
+    default: "BROKER001"
+    type: "string"
+
+  - name: "primary_exchange"
+    description: "Primary exchange (NSE or BSE)"
+    default: "NSE"
+    type: "string"
+
+  - name: "secondary_exchange"
+    description: "Secondary exchange (NSE or BSE)"
+    default: "BSE"
+    type: "string"
+
+  - name: "primary_depository"
+    description: "Primary depository for securities settlement (CDSL or NSDL)"
+    default: "CDSL"
+    type: "string"
+
+  - name: "secondary_depository"
+    description: "Secondary depository (CDSL or NSDL)"
+    default: "NSDL"
+    type: "string"
+
+  - name: "clearing_bank"
+    description: "Primary clearing bank for settlement fund transfers"
+    default: "HDFC Bank"
+    type: "string"
+
+  - name: "risk_channel"
+    description: "Risk team notification channel (e.g., #risk-alerts for Slack)"
+    default: "#risk-alerts"
+    type: "string"
+
+  - name: "compliance_channel"
+    description: "Compliance team notification channel (e.g., #compliance for Slack)"
+    default: "#compliance"
+    type: "string"
+
+  - name: "max_settlement_crore"
+    description: "Single-transaction settlement circuit breaker limit (₹ Crores)"
+    default: "100"
+    type: "number"
+
+  - name: "margin_alert_threshold_pct"
+    description: "Margin utilization threshold for automated alerts (%)"
+    default: "80"
+    type: "number"
+
+tags:
+  - "trade-processing"
+  - "settlement"
+  - "compliance"
+  - "indian-fintech"
+  - "backoffice"
+  - "automation"
+
+min_platform_version: "1.0.0"
