@@ -53,3 +53,4 @@ generate_platform_guide*.py
 convert_blog_to_pdf.py
 PDF_GENERATION_QUICKSTART.md
 SCREENSHOT_MAPPINGS.md
+SCREENSHOTS_INDEX.md
