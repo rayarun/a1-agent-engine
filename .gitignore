@@ -51,6 +51,7 @@ Untitled*.excalidraw
 # PDF generation tools and temporary docs (retained locally, not in repo)
 generate_platform_guide*.py
 convert_blog_to_pdf.py
+add_copyright_headers.py
 PDF_GENERATION_QUICKSTART.md
 SCREENSHOT_MAPPINGS.md
 SCREENSHOTS_INDEX.md
