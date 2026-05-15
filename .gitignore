@@ -44,5 +44,12 @@ zscaler.pem
 
 # Blog posts (drafts, local work)
 BLOG_POST_*.md
+BLOG_POST_*.pdf
 blog-drafts/
 Untitled*.excalidraw
+
+# PDF generation tools and temporary docs (retained locally, not in repo)
+generate_platform_guide*.py
+convert_blog_to_pdf.py
+PDF_GENERATION_QUICKSTART.md
+SCREENSHOT_MAPPINGS.md
