@@ -23,11 +23,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/temporalio/temporal-go-client/client"
 	"go.uber.org/zap"
 )
 

@@ -498,6 +498,28 @@ services:
     networks:
       - agent-net
 
+  # ------------------------------------
+  # Workflow Service (port 8094) - Hybrid Workflow Registry & Dispatcher
+  # ------------------------------------
+  workflow-service:
+    build:
+      context: ../../
+      dockerfile: services/workflow-service/Dockerfile
+    container_name: workflow-service
+    ports:
+      - "8094:8094"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
+      - TEMPORAL_HOSTPORT=temporal:7233
+      - PORT=8094
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_started
+    networks:
+      - agent-net
+
 networks:
   agent-net:
     driver: bridge
