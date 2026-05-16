@@ -188,7 +188,7 @@ export default function CookbooksPage() {
                   </Button>
                 </Link>
                 <Sheet open={sheetOpen && selectedCookbook?.id === cookbook.id} onOpenChange={handleSheetOpenChange}>
-                  <SheetTrigger>
+                  <SheetTrigger asChild>
                     <Button
                       className="flex-1"
                       onClick={() => handleImportClick(cookbook)}
