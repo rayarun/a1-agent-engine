@@ -1,0 +1,99 @@
+nodes:
+  - type: Exchange
+    properties:
+      exchange_code: "NSE"
+      name: "National Stock Exchange of India"
+      segment: "equity"
+
+  - type: Exchange
+    properties:
+      exchange_code: "BSE"
+      name: "Bombay Stock Exchange"
+      segment: "equity"
+
+  - type: Exchange
+    properties:
+      exchange_code: "MCX"
+      name: "Multi Commodity Exchange"
+      segment: "commodity"
+
+  - type: Depository
+    properties:
+      depository_code: "CDSL"
+      name: "Central Depository Services Limited"
+      settlement_type: "securities"
+
+  - type: Depository
+    properties:
+      depository_code: "NSDL"
+      name: "National Securities Depository Limited"
+      settlement_type: "securities"
+
+  - type: ClearingHouse
+    properties:
+      clearing_code: "NSCCL"
+      name: "National Securities Clearing Corporation Limited"
+      member_id: "NSE-CLEARING"
+      netted_position: 0
+
+  - type: ClearingHouse
+    properties:
+      clearing_code: "ICCL"
+      name: "Indian Clearing Corporation Limited"
+      member_id: "BSE-CLEARING"
+      netted_position: 0
+
+  - type: SecurityInstrument
+    properties:
+      isin: "INE002A01018"
+      symbol: "TCS"
+      instrument_type: "equity"
+      issuer_name: "Tata Consultancy Services Limited"
+
+  - type: SecurityInstrument
+    properties:
+      isin: "INE467B01029"
+      symbol: "INFY"
+      instrument_type: "equity"
+      issuer_name: "Infosys Limited"
+
+edges:
+  - from_node_type: Exchange
+    from_properties:
+      exchange_code: "NSE"
+    to_node_type: ClearingHouse
+    to_properties:
+      clearing_code: "NSCCL"
+    relationship_type: "uses_clearing"
+
+  - from_node_type: Exchange
+    from_properties:
+      exchange_code: "BSE"
+    to_node_type: ClearingHouse
+    to_properties:
+      clearing_code: "ICCL"
+    relationship_type: "uses_clearing"
+
+  - from_node_type: ClearingHouse
+    from_properties:
+      clearing_code: "NSCCL"
+    to_node_type: Depository
+    to_properties:
+      depository_code: "CDSL"
+    relationship_type: "settles_with"
+
+  - from_node_type: Exchange
+    from_properties:
+      exchange_code: "NSE"
+    to_node_type: SecurityInstrument
+    to_properties:
+      symbol: "TCS"
+    relationship_type: "lists_instrument"
+
+  - from_node_type: Exchange
+    from_properties:
+      exchange_code: "NSE"
+    to_node_type: SecurityInstrument
+    to_properties:
+      symbol: "INFY"
+    relationship_type: "lists_instrument"

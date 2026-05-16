@@ -1,0 +1,1457 @@
+openapi: 3.1.0
+info:
+  title: A1 Agent Engine Platform API
+  version: 1.0.0
+  description: >
+    Comprehensive API specification for the A1 Agent Engine — an enterprise agentic PaaS with
+    Temporal-based durable workflows, multi-tenancy, and MCP integration.
+
+    The platform operates in two distinct MCP modes:
+    - **Platform as MCP Client** (mcp-registry) — manages connections to 3rd-party MCP servers
+    - **Platform as MCP Server** (mcp-server) — exposes platform capabilities via MCP protocol
+  contact:
+    name: Platform Team
+    email: support@agentplatform.local
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development API Gateway
+  - url: http://localhost:8081
+    description: Local development Workflow Initiator
+  - url: http://localhost:8089
+    description: Local development Admin API
+  - url: http://localhost:8090
+    description: Local development MCP Registry (Tenant MCP Servers)
+  - url: http://localhost:8091
+    description: Local development MCP Server (Platform Capabilities)
+
+tags:
+  - name: Agent Execution
+    description: Public agent triggering and chat streaming
+    externalDocs:
+      url: '#/paths/~1api~1v1~1agents~1{agent_id}~1trigger'
+  - name: Session Management
+    description: Internal session status polling and event retrieval
+  - name: HITL Approvals
+    description: Human-in-the-loop approval management
+  - name: Administration
+    description: Tenant management, configuration, and monitoring
+  - name: MCP Client Management
+    description: Register and manage 3rd-party MCP servers as a client
+  - name: MCP Server
+    description: MCP JSON-RPC protocol endpoint (platform as server)
+
+components:
+  securitySchemes:
+    HmacAuth:
+      type: apiKey
+      name: X-Signature
+      in: header
+      description: >
+        HMAC-SHA256 signature. Format: `X-Signature: sha256=<hex>`.
+        Paired with `X-Timestamp: <unix-epoch>` header. Window tolerance: 300s.
+    AdminKeyAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: custom
+      description: >
+        Admin API key authentication. Either `Authorization: Bearer <key>` or `X-Admin-Key: <key>` header.
+        Token must match `ADMIN_API_KEY` environment variable.
+    McpTokenAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: sha256
+      description: >
+        MCP Server authentication. SHA-256 hashed bearer token from `mcp_tokens` table.
+        `Authorization: Bearer <token>` header. Tokens are looked up and validated against tenant.
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Error code (e.g., "INVALID_REQUEST", "UNAUTHORIZED", "RESOURCE_NOT_FOUND")
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: object
+          description: Optional structured error details
+          additionalProperties: true
+
+    TriggerRequest:
+      type: object
+      required:
+        - event_source
+      properties:
+        event_source:
+          type: string
+          description: Origin of the trigger (e.g., "webhook", "api", "cli")
+          example: "webhook"
+        payload:
+          type: object
+          description: Custom event data to pass to the agent
+          additionalProperties: true
+          example: { "user_id": "123", "action": "created" }
+        idempotency_key:
+          type: string
+          description: Optional UUID for idempotent retries. Deduplicates identical triggers.
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    TriggerResponse:
+      type: object
+      required:
+        - workflow_id
+        - run_id
+        - status
+      properties:
+        workflow_id:
+          type: string
+          description: Temporal workflow execution ID
+          example: "agent-123-run-001"
+        run_id:
+          type: string
+          description: Temporal run ID (unique per execution)
+          example: "001"
+        status:
+          type: string
+          enum: [PENDING, RUNNING, COMPLETED, FAILED, CANCELLED]
+          description: Initial workflow status (typically RUNNING)
+
+    StartSessionRequest:
+      type: object
+      required:
+        - agent_id
+      properties:
+        agent_id:
+          type: string
+          description: ID of the agent to execute
+          example: "agent-sre-devops"
+        prompt:
+          type: string
+          description: User prompt for agentic reasoning
+          example: "Analyze the recent deployment logs"
+        tenant_id:
+          type: string
+          description: Tenant scope (optional; defaults to "default-tenant")
+          example: "org-acme"
+        session_id:
+          type: string
+          description: Optional UUID for session deduplication (idempotency)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        idempotency_key:
+          type: string
+          description: Deduplication key for webhook retries
+          example: "webhook-retry-789"
+        context:
+          type: object
+          description: Business context for the execution
+          additionalProperties: true
+          example: { "user_id": "user-456", "feature_flag": "new-ui" }
+        manifest:
+          type: object
+          description: Optional agent manifest override (advanced)
+          additionalProperties: true
+
+    SessionStatus:
+      type: object
+      required:
+        - workflow_id
+        - run_id
+        - status
+      properties:
+        workflow_id:
+          type: string
+          example: "agent-123-run-001"
+        run_id:
+          type: string
+          example: "001"
+        status:
+          type: string
+          enum: [RUNNING, COMPLETED, FAILED, CANCELLED, TIMED_OUT]
+          description: Current workflow status
+        result:
+          type: object
+          description: Final output when status is COMPLETED
+          additionalProperties: true
+        error:
+          type: string
+          description: Error message when status is FAILED
+        started_at:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp of workflow start
+        completed_at:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp of workflow completion
+
+    AgentEvent:
+      type: object
+      description: Streaming event from agent execution (Server-Sent Events or WebSocket)
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          enum: [thought, tool_call, tool_result, approval_request, completion, error]
+          description: Event classification
+        content:
+          type: string
+          description: Thought or reasoning text (for type=thought)
+        tool_name:
+          type: string
+          description: Name of tool being invoked (for type=tool_call)
+        tool_args:
+          type: object
+          description: Arguments to the tool (for type=tool_call)
+          additionalProperties: true
+        tool_result:
+          type: object
+          description: Result from tool execution (for type=tool_result)
+          additionalProperties: true
+        approval_id:
+          type: string
+          description: HITL approval ID (for type=approval_request)
+        approval_reason:
+          type: string
+          description: Reason why tool execution requires approval
+        timestamp:
+          type: string
+          format: date-time
+          description: Event timestamp
+
+    PollResponse:
+      type: object
+      required:
+        - events
+        - status
+        - from
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentEvent'
+          description: Incremental events since the `from` cursor
+        status:
+          $ref: '#/components/schemas/SessionStatus'
+          description: Current session status
+        from:
+          type: integer
+          description: Cursor for next poll (use in next request's `?from=` parameter)
+          example: 42
+
+    ChatRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: User message or prompt
+          example: "What services are deployed?"
+        tenant_id:
+          type: string
+          description: Optional tenant ID (overrides X-Tenant-ID header or defaults to default-tenant)
+
+    HITLApprovalRequest:
+      type: object
+      required:
+        - id
+        - workflow_id
+        - agent_id
+        - tenant_id
+        - tool_name
+        - tool_args
+        - reason
+        - status
+      properties:
+        id:
+          type: string
+          description: Approval request ID (UUID)
+        workflow_id:
+          type: string
+          description: Associated Temporal workflow ID
+        agent_id:
+          type: string
+          description: Agent ID that triggered the approval
+        tenant_id:
+          type: string
+          description: Tenant scope
+        tool_name:
+          type: string
+          description: Name of the tool awaiting approval
+          example: "bash_execute"
+        tool_args:
+          type: object
+          description: Tool arguments that require approval
+          additionalProperties: true
+        reason:
+          type: string
+          description: Human-readable reason for approval requirement
+          example: "This bash command modifies production infrastructure"
+        status:
+          type: string
+          enum: [pending, approved, denied]
+          description: Approval status
+        created_at:
+          type: string
+          format: date-time
+        approved_by:
+          type: string
+          description: User ID who approved (if status=approved)
+        approved_at:
+          type: string
+          format: date-time
+        denial_reason:
+          type: string
+          description: Reason for denial (if status=denied)
+
+    TenantSettings:
+      type: object
+      required:
+        - tenant_id
+      properties:
+        tenant_id:
+          type: string
+          description: Unique tenant identifier
+          example: "org-acme"
+        display_name:
+          type: string
+          description: Human-readable tenant name
+          example: "Acme Corporation"
+        status:
+          type: string
+          enum: [active, suspended]
+          description: Tenant operational status
+        max_concurrent_workflows:
+          type: integer
+          description: Maximum parallel agent executions allowed
+          example: 100
+        token_budget_monthly:
+          type: integer
+          description: Monthly token budget across all models (0 = unlimited)
+          example: 1000000
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TenantStats:
+      allOf:
+        - $ref: '#/components/schemas/TenantSettings'
+        - type: object
+          properties:
+            agent_count:
+              type: integer
+              description: Number of agents owned by this tenant
+            skill_count:
+              type: integer
+              description: Number of custom skills
+            tool_count:
+              type: integer
+              description: Number of custom tools
+            monthly_cost:
+              type: number
+              format: double
+              description: Estimated monthly cost in USD
+
+    TenantSettingsUpdate:
+      type: object
+      properties:
+        display_name:
+          type: string
+        status:
+          type: string
+          enum: [active, suspended]
+        max_concurrent_workflows:
+          type: integer
+        token_budget_monthly:
+          type: integer
+
+    MCPServer:
+      type: object
+      required:
+        - id
+        - tenant_id
+        - name
+        - url
+        - scope
+      properties:
+        id:
+          type: string
+          description: MCP server registration ID (UUID)
+        tenant_id:
+          type: string
+          description: Owner tenant (null for global scope)
+        name:
+          type: string
+          description: User-friendly server name
+          example: "Claude Desktop AI"
+        url:
+          type: string
+          format: uri
+          description: MCP server endpoint URL
+          example: "http://localhost:3000/mcp"
+        enabled:
+          type: boolean
+          description: Whether this server is active
+        scope:
+          type: string
+          enum: [tenant, global]
+          description: Visibility scope (tenant-scoped or global)
+        auth_config:
+          type: object
+          description: Authentication configuration (masked in responses as ****)
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    MCPTool:
+      type: object
+      required:
+        - name
+        - description
+        - inputSchema
+      properties:
+        name:
+          type: string
+          description: Tool name (used in tool/call MCP requests)
+          example: "kg_search_entities"
+        description:
+          type: string
+          description: Tool description (shown to AI models)
+        inputSchema:
+          type: object
+          description: JSON Schema for tool input parameters
+          additionalProperties: true
+
+    LLMConfigRequest:
+      type: object
+      properties:
+        anthropic_api_key:
+          type: string
+          description: Anthropic API key for Claude models
+        anthropic_base_url:
+          type: string
+          format: uri
+          description: Custom Anthropic base URL (for on-prem or proxy)
+        openai_api_key:
+          type: string
+          description: OpenAI API key (for GPT models)
+
+    LLMConfigResponse:
+      type: object
+      required:
+        - anthropic_base_url
+        - anthropic_key_set
+        - openai_key_set
+        - mode
+      properties:
+        anthropic_base_url:
+          type: string
+          format: uri
+          description: Active Anthropic base URL
+        anthropic_key_set:
+          type: boolean
+          description: Whether Anthropic API key is configured
+        openai_key_set:
+          type: boolean
+          description: Whether OpenAI API key is configured
+        mode:
+          type: string
+          enum: [mock, anthropic, openai, custom]
+          description: Currently active LLM backend
+
+    CostEvent:
+      type: object
+      required:
+        - event_id
+        - tenant_id
+        - workflow_id
+        - timestamp
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+        workflow_id:
+          type: string
+        agent_id:
+          type: string
+        skill_id:
+          type: string
+        tokens_in:
+          type: integer
+          description: Input tokens consumed
+        tokens_out:
+          type: integer
+          description: Output tokens generated
+        sandbox_execution_ms:
+          type: integer
+          description: Milliseconds of sandbox tool execution
+        vector_operations:
+          type: integer
+          description: Number of vector embedding operations
+        timestamp:
+          type: string
+          format: date-time
+
+paths:
+  # ============================================================================
+  # Agent Execution (api-gateway)
+  # ============================================================================
+
+  /api/v1/agents/{agent_id}/trigger:
+    post:
+      tags:
+        - Agent Execution
+      summary: Trigger an agent workflow
+      description: >
+        Creates a new Temporal workflow execution for the specified agent.
+        Requires HMAC signature validation for security.
+        Returns 202 Accepted with workflow tracking IDs.
+      x-audience: external
+      x-mcp-tool-name: platform__trigger_agent
+      x-idempotent: true
+      x-mutating: true
+      operationId: triggerAgent
+      security:
+        - HmacAuth: []
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent ID to trigger
+          example: agent-sre-devops
+        - name: X-Tenant-ID
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Tenant scope (optional; defaults to "default-tenant")
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TriggerRequest'
+      responses:
+        '202':
+          description: Workflow triggered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TriggerResponse'
+        '400':
+          description: Bad request (invalid payload or missing signature)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized (invalid or missing HMAC signature)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Idempotency conflict (duplicate idempotency_key)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ============================================================================
+  # Session Management (workflow-initiator)
+  # ============================================================================
+
+  /api/v1/sessions/{id}:
+    get:
+      tags:
+        - Session Management
+      summary: Get session status
+      description: >
+        Retrieve the current status and result of a workflow execution.
+        Use this to poll for completion.
+      x-audience: external
+      x-mcp-tool-name: platform__get_session
+      x-idempotent: true
+      operationId: getSessionStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Session/workflow ID
+          example: agent-sre-devops-run-001
+      responses:
+        '200':
+          description: Session status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStatus'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/sessions/{id}/poll:
+    get:
+      tags:
+        - Session Management
+      summary: Poll session for incremental events
+      description: >
+        Retrieve events and status in a single call.
+        Use the `from` cursor for incremental polling (no re-read of old events).
+        Poll until `status` is COMPLETED or FAILED.
+      x-audience: external
+      x-mcp-tool-name: platform__poll_session
+      x-idempotent: true
+      operationId: pollSession
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Session ID
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+          description: Event cursor; returns events from this index onward
+      responses:
+        '200':
+          description: Incremental events and status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PollResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ============================================================================
+  # HITL Approvals (workflow-initiator)
+  # ============================================================================
+
+  /api/v1/approvals/pending:
+    get:
+      tags:
+        - HITL Approvals
+      summary: List pending approvals
+      description: >
+        Retrieve all human-in-the-loop approval requests for the tenant.
+        These are workflows blocked waiting for human decision on a tool call.
+      x-audience: external
+      x-mcp-tool-name: platform__list_hitl_approvals
+      x-idempotent: true
+      operationId: listPendingApprovals
+      parameters:
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Tenant to filter by
+      responses:
+        '200':
+          description: List of pending approvals
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - approvals
+                properties:
+                  approvals:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HITLApprovalRequest'
+        '400':
+          description: Missing X-Tenant-ID header
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/approvals/{id}/approve:
+    post:
+      tags:
+        - HITL Approvals
+      summary: Approve a blocked tool call
+      description: >
+        Approves a tool invocation that was blocked for HITL.
+        Resumes the workflow with approval decision.
+      x-audience: external
+      x-mcp-tool-name: platform__approve_hitl
+      x-mutating: true
+      operationId: approveHITL
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Approval request ID
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Tenant scope
+        - name: X-User-ID
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Optional user ID for audit trail
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Approval processed; workflow resumed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [approved]
+        '404':
+          description: Approval request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/approvals/{id}/deny:
+    post:
+      tags:
+        - HITL Approvals
+      summary: Deny a blocked tool call
+      description: >
+        Denies a tool invocation request, blocking the tool call permanently.
+        Optionally provide a denial reason for audit trail.
+      x-audience: external
+      x-mcp-tool-name: platform__deny_hitl
+      x-mutating: true
+      operationId: denyHITL
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Approval request ID
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Tenant scope
+        - name: X-User-ID
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Optional user ID for audit trail
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  description: Optional denial reason
+      responses:
+        '200':
+          description: Denial processed; workflow resumed with error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [denied]
+        '404':
+          description: Approval request not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ============================================================================
+  # Administration (admin-api)
+  # ============================================================================
+
+  /api/v1/admin/tenants:
+    get:
+      tags:
+        - Administration
+      summary: List all tenants
+      description: Retrieve all tenant configurations and statistics.
+      x-audience: external
+      security:
+        - AdminKeyAuth: []
+      operationId: listTenants
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of tenants
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenants:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TenantStats'
+                  count:
+                    type: integer
+        '401':
+          description: Unauthorized (invalid admin key)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      tags:
+        - Administration
+      summary: Create a new tenant
+      description: Provision a new tenant with optional quota settings.
+      x-audience: external
+      x-mutating: true
+      security:
+        - AdminKeyAuth: []
+      operationId: createTenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+              properties:
+                tenant_id:
+                  type: string
+                  example: org-newco
+                display_name:
+                  type: string
+                  example: NewCo Inc
+                max_concurrent_workflows:
+                  type: integer
+                  default: 10
+                token_budget_monthly:
+                  type: integer
+                  default: 0
+      responses:
+        '201':
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantSettings'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Tenant already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/tenants/{id}:
+    get:
+      tags:
+        - Administration
+      summary: Get tenant details
+      description: Retrieve full tenant configuration and usage statistics.
+      x-audience: external
+      security:
+        - AdminKeyAuth: []
+      operationId: getTenant
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tenant details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantStats'
+        '404':
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Administration
+      summary: Delete a tenant
+      description: Permanently delete a tenant and cascade all its resources.
+      x-audience: external
+      x-mutating: true
+      security:
+        - AdminKeyAuth: []
+      operationId: deleteTenant
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Tenant deleted
+        '404':
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/tenants/{id}/quota:
+    put:
+      tags:
+        - Administration
+      summary: Update tenant quota
+      description: Modify tenant concurrency and token budget limits.
+      x-audience: external
+      x-mutating: true
+      security:
+        - AdminKeyAuth: []
+      operationId: updateTenantQuota
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantSettingsUpdate'
+      responses:
+        '200':
+          description: Quota updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantSettings'
+        '404':
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/llm/config:
+    get:
+      tags:
+        - Administration
+      summary: Get LLM configuration
+      description: Retrieve current LLM backend configuration and available models.
+      x-audience: external
+      security:
+        - AdminKeyAuth: []
+      operationId: getLLMConfig
+      responses:
+        '200':
+          description: LLM configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LLMConfigResponse'
+
+    put:
+      tags:
+        - Administration
+      summary: Update LLM configuration
+      description: Configure or update LLM backends (Anthropic, OpenAI, custom).
+      x-audience: external
+      x-mutating: true
+      security:
+        - AdminKeyAuth: []
+      operationId: updateLLMConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LLMConfigRequest'
+      responses:
+        '200':
+          description: Configuration updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LLMConfigResponse'
+        '400':
+          description: Invalid configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/cost:
+    get:
+      tags:
+        - Administration
+      summary: Get platform cost summary
+      description: Retrieve aggregated costs across all tenants for a time period.
+      x-audience: external
+      security:
+        - AdminKeyAuth: []
+      operationId: getCostSummary
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            default: 30d
+          description: Time period (e.g., "7d", "30d", "90d")
+      responses:
+        '200':
+          description: Cost summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period:
+                    type: string
+                  total_cost_usd:
+                    type: number
+                    format: double
+                  by_tenant:
+                    type: object
+                    additionalProperties:
+                      type: number
+
+  /api/v1/admin/cost/{tenant_id}:
+    get:
+      tags:
+        - Administration
+      summary: Get tenant cost breakdown
+      description: Retrieve costs for a specific tenant broken down by agent and skill.
+      x-audience: external
+      security:
+        - AdminKeyAuth: []
+      operationId: getCostByTenant
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: period
+          in: query
+          schema:
+            type: string
+            default: 30d
+      responses:
+        '200':
+          description: Tenant cost breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant_id:
+                    type: string
+                  period:
+                    type: string
+                  total_cost_usd:
+                    type: number
+                  by_agent:
+                    type: object
+                    additionalProperties:
+                      type: number
+                  by_skill:
+                    type: object
+                    additionalProperties:
+                      type: number
+
+  # ============================================================================
+  # MCP Client Management (mcp-registry)
+  # ============================================================================
+
+  /api/v1/mcp/servers:
+    post:
+      tags:
+        - MCP Client Management
+      summary: Register external MCP server
+      description: >
+        Register a 3rd-party MCP server for the tenant to use.
+        The platform will act as an MCP client connecting to this server.
+      x-audience: external
+      x-mutating: true
+      operationId: registerMCPServer
+      parameters:
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Tenant ID (required)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - url
+              properties:
+                name:
+                  type: string
+                  example: Claude Desktop
+                url:
+                  type: string
+                  format: uri
+                  example: http://localhost:3000/mcp
+                auth_config:
+                  type: object
+                  description: Auth configuration (credentials will be encrypted)
+                  additionalProperties: true
+      responses:
+        '201':
+          description: Server registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MCPServer'
+        '400':
+          description: Invalid server configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - MCP Client Management
+      summary: List MCP servers
+      description: >
+        Retrieve all MCP servers available to the tenant
+        (both tenant-scoped and global servers).
+      x-audience: external
+      operationId: listMCPServers
+      parameters:
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of MCP servers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  servers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MCPServer'
+
+  /api/v1/mcp/servers/{id}:
+    delete:
+      tags:
+        - MCP Client Management
+      summary: Deregister MCP server
+      description: Remove an MCP server registration (tenant-scoped only).
+      x-audience: external
+      x-mutating: true
+      operationId: deleteMCPServer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Server deregistered
+        '404':
+          description: Server not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/mcp/servers/{id}/tools:
+    get:
+      tags:
+        - MCP Client Management
+      summary: Discover tools from MCP server
+      description: >
+        Connect to the registered MCP server and list its available tools.
+        Results are cached for performance.
+      x-audience: external
+      operationId: discoverMCPTools
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Available tools from server
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MCPTool'
+        '404':
+          description: Server not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/mcp/servers/{id}/call:
+    post:
+      tags:
+        - MCP Client Management
+      summary: Invoke tool on MCP server
+      description: >
+        Call a specific tool on the registered MCP server.
+        Platform acts as the MCP client forwarding the tool call.
+      x-audience: external
+      x-mutating: true
+      operationId: invokeMCPTool
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tool_name
+              properties:
+                tool_name:
+                  type: string
+                  example: search
+                args:
+                  type: object
+                  description: Tool arguments
+                  additionalProperties: true
+      responses:
+        '200':
+          description: Tool invoked; result returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: object
+                    additionalProperties: true
+        '400':
+          description: Invalid tool call
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ============================================================================
+  # MCP Server (mcp-server)
+  # ============================================================================
+
+  /mcp:
+    post:
+      tags:
+        - MCP Server
+      summary: MCP JSON-RPC 2.0 endpoint
+      description: >
+        The MCP protocol endpoint. External MCP clients (Claude Desktop, etc.)
+        connect here using JSON-RPC 2.0 over HTTP.
+
+        Supported methods:
+        - `initialize` — Start MCP session
+        - `tools/list` — Discover available tools (skills + platform APIs + KG tools)
+        - `tools/call` — Invoke a tool
+      x-audience: external
+      x-websocket: false
+      security:
+        - McpTokenAuth: []
+      operationId: handleMCP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - jsonrpc
+                - method
+                - id
+              properties:
+                jsonrpc:
+                  type: string
+                  enum: ['2.0']
+                method:
+                  type: string
+                  enum: [initialize, tools/list, tools/call]
+                params:
+                  type: object
+                  description: Method-specific parameters
+                  additionalProperties: true
+                id:
+                  type: integer
+                  description: Request ID (must be echoed in response)
+      responses:
+        '200':
+          description: MCP JSON-RPC response
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - jsonrpc
+                  - id
+                properties:
+                  jsonrpc:
+                    type: string
+                    enum: ['2.0']
+                  result:
+                    type: object
+                    description: Success result object (method-dependent)
+                    additionalProperties: true
+                  error:
+                    type: object
+                    description: JSON-RPC error object (if applicable)
+                    properties:
+                      code:
+                        type: integer
+                      message:
+                        type: string
+                      data:
+                        type: object
+                  id:
+                    type: integer
+        '400':
+          description: Malformed JSON-RPC request
+        '401':
+          description: Unauthorized (invalid or missing token)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /mcp/sse:
+    get:
+      tags:
+        - MCP Server
+      summary: MCP Server-Sent Events stream
+      description: >
+        SSE transport for MCP protocol (keepalive stream).
+        Currently sends only keepalive events; proactive server-to-client
+        events (e.g., tool updates) are not yet implemented.
+      x-audience: external
+      x-event-stream: true
+      security:
+        - McpTokenAuth: []
+      operationId: handleMCPSSE
+      responses:
+        '200':
+          description: SSE stream established
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "Keepalive comment frames (: keepalive)"
+        '401':
+          description: Unauthorized

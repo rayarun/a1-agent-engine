@@ -198,7 +198,7 @@ export default function CookbooksPage() {
                   </SheetTrigger>
 
                 {selectedCookbook?.id === cookbook.id && (
-                  <SheetContent>
+                  <SheetContent className="flex flex-col">
                     <SheetHeader>
                       <SheetTitle>{selectedCookbook.name}</SheetTitle>
                       <SheetDescription>
@@ -206,7 +206,8 @@ export default function CookbooksPage() {
                       </SheetDescription>
                     </SheetHeader>
 
-                    <div className="space-y-6 mt-6">
+                    <div className="flex-1 overflow-y-auto pr-4">
+                      <div className="space-y-6 mt-6">
                       {/* Target tenant display */}
                       <div>
                         <label className="text-sm font-medium">
@@ -331,6 +332,7 @@ export default function CookbooksPage() {
                             : "Import Cookbook"}
                         </Button>
                       )}
+                      </div>
                     </div>
                   </SheetContent>
                 )}

@@ -41,6 +41,11 @@ func main() {
 		skillDispatcherURL = "http://localhost:8085"
 	}
 
+	workflowInitiatorURL := os.Getenv("WORKFLOW_INITIATOR_URL")
+	if workflowInitiatorURL == "" {
+		workflowInitiatorURL = "http://localhost:8081"
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8091"
@@ -56,7 +61,7 @@ func main() {
 		log.Fatalf("Failed to ping database: %v", err)
 	}
 
-	svc := service.NewService(db, skillCatalogURL, skillDispatcherURL)
+	svc := service.NewService(db, skillCatalogURL, skillDispatcherURL, workflowInitiatorURL)
 
 	// Routes
 	mux := http.NewServeMux()

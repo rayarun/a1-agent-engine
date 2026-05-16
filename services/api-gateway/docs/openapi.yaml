@@ -1,31 +1,12 @@
-swagger: "2.0"
-info:
-  title: "API Gateway"
-  version: "1.0.0"
-host: "localhost:8080"
-basePath: "/api/v1"
-schemes:
-  - "http"
-paths:
-  /agents/{agent_id}/trigger:
-    post:
-      summary: "Trigger an agent workflow"
-      parameters:
-        - name: "agent_id"
-          in: "path"
-          required: true
-          type: "string"
-      responses:
-        202:
-          description: "Workflow triggered"
-  /sessions/{id}/status:
-    get:
-      summary: "Get session status and results"
-      parameters:
-        - name: "id"
-          in: "path"
-          required: true
-          type: "string"
-      responses:
-        200:
-          description: "Current session status"
+# This file is deprecated. Use ../../docs/api/openapi.yaml instead.
+#
+# The comprehensive OpenAPI 3.1 specification is maintained at the repository root
+# to serve as the single source of truth for all platform APIs.
+#
+# Location: docs/api/openapi.yaml
+# Maintained in OpenAPI 3.1.0 format with:
+# - All externally-facing endpoints
+# - Full semantic documentation
+# - MCP tool mappings (x-mcp-tool-name)
+# - Security scheme definitions
+# - Complete request/response schemas

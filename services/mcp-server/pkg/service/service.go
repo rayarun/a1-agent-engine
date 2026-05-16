@@ -25,28 +25,31 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
 // Service handles MCP server operations
 type Service struct {
-	db                 *sql.DB
-	skillCatalogURL    string
-	skillDispatcherURL string
-	kgServiceURL       string
+	db                   *sql.DB
+	skillCatalogURL      string
+	skillDispatcherURL   string
+	kgServiceURL         string
+	workflowInitiatorURL string
 }
 
 // NewService creates a new MCP server service
-func NewService(db *sql.DB, skillCatalogURL, skillDispatcherURL string) *Service {
+func NewService(db *sql.DB, skillCatalogURL, skillDispatcherURL, workflowInitiatorURL string) *Service {
 	kgServiceURL := os.Getenv("KG_SERVICE_URL")
 	if kgServiceURL == "" {
 		kgServiceURL = "http://localhost:8093"
 	}
 	return &Service{
-		db:                 db,
-		skillCatalogURL:    skillCatalogURL,
-		skillDispatcherURL: skillDispatcherURL,
-		kgServiceURL:       kgServiceURL,
+		db:                   db,
+		skillCatalogURL:      skillCatalogURL,
+		skillDispatcherURL:   skillDispatcherURL,
+		kgServiceURL:         kgServiceURL,
+		workflowInitiatorURL: workflowInitiatorURL,
 	}
 }
 
@@ -395,7 +398,7 @@ func (s *Service) handleInitialize(w http.ResponseWriter, id int) {
 	})
 }
 
-// handleListTools lists available skills as MCP tools plus built-in KG tools
+// handleListTools lists available skills as MCP tools plus built-in KG tools and platform API tools
 func (s *Service) handleListTools(w http.ResponseWriter, ctx context.Context, tenantID string, id int) {
 	skills, err := s.getSkills(ctx, tenantID)
 	if err != nil {
@@ -410,9 +413,10 @@ func (s *Service) handleListTools(w http.ResponseWriter, ctx context.Context, te
 		return
 	}
 
-	// Combine skill tools and KG tools
+	// Combine skill tools, KG tools, and platform API tools
 	kgTools := s.getKGTools()
-	tools := make([]MCPToolDefinition, len(skills)+len(kgTools))
+	platformTools := s.getPlatformAPITools()
+	tools := make([]MCPToolDefinition, len(skills)+len(kgTools)+len(platformTools))
 
 	for i, skill := range skills {
 		tools[i] = MCPToolDefinition{
@@ -426,6 +430,10 @@ func (s *Service) handleListTools(w http.ResponseWriter, ctx context.Context, te
 		tools[len(skills)+i] = kgTool
 	}
 
+	for i, platformTool := range platformTools {
+		tools[len(skills)+len(kgTools)+i] = platformTool
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"jsonrpc": "2.0",
 		"result": map[string]interface{}{
@@ -435,7 +443,7 @@ func (s *Service) handleListTools(w http.ResponseWriter, ctx context.Context, te
 	})
 }
 
-// handleCallTool invokes a skill or KG tool
+// handleCallTool invokes a skill, KG tool, or platform API tool
 func (s *Service) handleCallTool(w http.ResponseWriter, ctx context.Context, tenantID string, params map[string]interface{}, id int) {
 	name, ok := params["name"].(string)
 	if !ok {
@@ -458,11 +466,12 @@ func (s *Service) handleCallTool(w http.ResponseWriter, ctx context.Context, ten
 	var result string
 	var err error
 
-	// Check if it's a KG tool
-	if name == "kg_search_entities" || name == "kg_get_relationships" {
+	// Route by tool category: platform API → KG → skill
+	if strings.HasPrefix(name, "platform__") {
+		result, err = s.invokePlatformTool(ctx, tenantID, name, args)
+	} else if name == "kg_search_entities" || name == "kg_get_relationships" {
 		result, err = s.invokeKGTool(ctx, tenantID, name, args)
 	} else {
-		// Otherwise, invoke as a skill
 		result, err = s.invokeSkill(ctx, tenantID, name, args)
 	}
 

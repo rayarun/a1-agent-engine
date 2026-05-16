@@ -1,0 +1,95 @@
+description: Trade Settlement Domain Knowledge Graph Schema
+node_types:
+  - name: Trade
+    properties:
+      trade_id: string
+      symbol: string
+      quantity: number
+      price: number
+      side: string # BUY or SELL
+      exchange: string
+      settlement_date: string
+      status: string
+
+  - name: Client
+    properties:
+      client_id: string
+      name: string
+      account_type: string
+      credit_limit: number
+      settlement_bank: string
+
+  - name: Settlement
+    properties:
+      settlement_id: string
+      trade_id: string
+      status: string
+      debit_credit: string
+      amount: number
+      currency: string
+
+  - name: Depository
+    properties:
+      depository_code: string
+      name: string # CDSL or NSDL
+      settlement_type: string
+
+  - name: Exchange
+    properties:
+      exchange_code: string
+      name: string # NSE, BSE, MCX
+      segment: string # equity, f&o, commodity
+
+  - name: ClearingHouse
+    properties:
+      clearing_code: string
+      name: string # NSCCL, ICCL
+      member_id: string
+      netted_position: number
+
+  - name: SecurityInstrument
+    properties:
+      isin: string
+      symbol: string
+      instrument_type: string # equity, bond, derivative
+      issuer_name: string
+
+  - name: CollateralAllocation
+    properties:
+      collateral_id: string
+      client_id: string
+      amount: number
+      instrument_type: string
+
+edge_types:
+  - from_node_type: Trade
+    to_node_type: Client
+    relationship_type: "executed_by"
+    properties:
+      execution_time: string
+
+  - from_node_type: Trade
+    to_node_type: Exchange
+    relationship_type: "traded_on"
+    properties:
+      trade_time: string
+
+  - from_node_type: Trade
+    to_node_type: SecurityInstrument
+    relationship_type: "involves"
+
+  - from_node_type: Trade
+    to_node_type: Settlement
+    relationship_type: "settles_via"
+
+  - from_node_type: Settlement
+    to_node_type: Depository
+    relationship_type: "processed_by"
+
+  - from_node_type: Settlement
+    to_node_type: ClearingHouse
+    relationship_type: "cleared_by"
+
+  - from_node_type: Client
+    to_node_type: CollateralAllocation
+    relationship_type: "has_collateral"
