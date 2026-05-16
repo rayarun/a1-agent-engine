@@ -1633,6 +1633,12 @@ type CookbookVariable struct {
 	Type        string `json:"type" yaml:"type"`
 }
 
+type CookbookMCPRecommendation struct {
+	Name        string `json:"name" yaml:"name"`
+	Description string `json:"description" yaml:"description"`
+	Required    bool   `json:"required" yaml:"required"`
+}
+
 type CookbookManifest struct {
 	Name        string `yaml:"name"`
 	Version     string `yaml:"version"`
@@ -1650,9 +1656,10 @@ type CookbookManifest struct {
 			Description string `yaml:"description"`
 		} `yaml:"agents"`
 	} `yaml:"creates"`
-	Variables            []CookbookVariable `yaml:"variables"`
-	Tags                 []string           `yaml:"tags"`
-	MinPlatformVersion   string             `yaml:"min_platform_version"`
+	MCPRecommendations   []CookbookMCPRecommendation `yaml:"mcp_recommendations"`
+	Variables            []CookbookVariable          `yaml:"variables"`
+	Tags                 []string                    `yaml:"tags"`
+	MinPlatformVersion   string                      `yaml:"min_platform_version"`
 }
 
 type CookbookInfo struct {
@@ -1678,12 +1685,6 @@ type CookbookKGDetail struct {
 	SeedDataFile  string `json:"seed_data_file"`
 	SchemaContent string `json:"schema_content"`
 	SeedContent   string `json:"seed_content"`
-}
-
-type CookbookMCPRecommendation struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Required    bool   `json:"required"`
 }
 
 type CookbookDetail struct {
@@ -1837,27 +1838,8 @@ func (h *AdminHandler) HandleGetCookbook(w http.ResponseWriter, r *http.Request)
 		})
 	}
 
-	// Read MCP recommendations
-	mcpPath := filepath.Join(cookbookPath, "mcp-recommendations.yaml")
-	mcpData, err := os.ReadFile(mcpPath)
-	if err == nil {
-		var mcpFile struct {
-			MCPServers []struct {
-				Name        string `yaml:"name"`
-				Description string `yaml:"description"`
-				Required    bool   `yaml:"required"`
-			} `yaml:"mcp_servers"`
-		}
-		if err := yaml.Unmarshal(mcpData, &mcpFile); err == nil {
-			for _, m := range mcpFile.MCPServers {
-				detail.MCPRecommendations = append(detail.MCPRecommendations, CookbookMCPRecommendation{
-					Name:        m.Name,
-					Description: m.Description,
-					Required:    m.Required,
-				})
-			}
-		}
-	}
+	// Copy MCP recommendations from manifest
+	detail.MCPRecommendations = manifest.MCPRecommendations
 
 	json.NewEncoder(w).Encode(detail)
 }
