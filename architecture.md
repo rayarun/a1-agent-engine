@@ -2862,3 +2862,549 @@ To iterate offline or avoid executing dangerous tools accidentally during testin
 - **Multi-Tenancy Local Mode**: Local dev runs against a single `dev` tenant schema. Cross-tenant isolation tests require running `make tenant-seed` to create additional tenant schemas in the local Postgres container.
 - **Team Simulation**: `POST /api/v1/teams/{id}/trigger` works against the local docker-compose Temporal instance. Sub-agents run as separate goroutines within the same worker process — no separate pods required locally.
 - **Execution Sandbox Compatibility**: Docker-out-of-Docker socket mounting enables ephemeral sandbox containers to spawn locally on Mac hardware exactly as in production, preventing environment mismatches.
+
+---
+
+## 2.0 Hybrid Workflow Execution Model
+
+The **Hybrid Workflow Platform** extends the A1 Agent Engine to support both **declarative YAML workflows** and **imperative Python SDK workflows** backed by Temporal. This section details the execution model, lifecycle, and integrations.
+
+### 2.0a Overview
+
+Workflows are durable execution DAGs that combine pure Temporal task pipelines with agentic reasoning:
+
+**Three Execution Modes:**
+
+1. **YAML-Defined Workflows (Profile 1)**: Low-code workflow authoring for non-developers
+   - Define in YAML, deploy via Agent Studio
+   - Platform compiles to `HybridWorkflow` Temporal class
+   - Executed on `platform-hybrid-queue` (managed worker)
+   - Supports: tasks (skills), agents (child workflows), HITL gates, parallel/conditional branching
+
+2. **Python SDK Workflows (Profile 2)**: Developers write standard `@workflow.defn` code
+   - Import platform activities from `a1-agent-sdk`
+   - Deploy own Temporal worker with custom queue
+   - Full Temporal semantics: durability, retry, signals
+   - Seamlessly integrates platform primitives (invoke_skill, run_agent, hitl_approval, kg_search, etc.)
+
+3. **External Workflows (Profile 3)**: Existing Go/Java Temporal workflows
+   - Register with platform via REST API
+   - Platform can trigger via webhook/manual/cron
+   - Workflows benefit from platform audit & cost tracking
+   - No code changes required
+
+### 2.0b HybridWorkflow Temporal Class
+
+The `HybridWorkflow` class (defined in `services/agent-workers/workflows.py`) implements YAML workflow execution:
+
+```python
+@workflow.defn
+class HybridWorkflow:
+    _events: list[dict] = []  # Audit trail
+    _hitl_decision: Optional[dict] = None
+    
+    @workflow.run
+    async def run(self, request: dict) -> dict:
+        definition = request["definition"]   # WorkflowDefinition (parsed YAML)
+        inputs = request["inputs"]           # Caller-provided inputs
+        tenant_id = request["tenant_id"]     # Multi-tenancy
+        
+        context = WorkflowContext(
+            inputs=inputs,
+            steps={},
+            tenant_id=tenant_id,
+            start_time=time.time()
+        )
+        
+        # Topological sort for DAG execution
+        for step in topological_sort(definition["steps"]):
+            self._emit("step_start", step["id"])
+            
+            try:
+                # Resolve input templates ({{ }})
+                resolved_inputs = resolve_template_inputs(
+                    step.get("input_mapping", {}),
+                    context
+                )
+                
+                # Route to step executor based on step.type
+                result = await self._execute_step(
+                    step["type"],
+                    step,
+                    resolved_inputs,
+                    context
+                )
+                
+                # Store result
+                context.steps[step["id"]] = {
+                    "status": "completed",
+                    "output": result,
+                    "duration_ms": elapsed_ms,
+                    "cost": cost_delta
+                }
+                self._emit("step_completed", step["id"])
+                
+            except Exception as e:
+                context.steps[step["id"]] = {
+                    "status": "failed",
+                    "error": str(e),
+                    "duration_ms": elapsed_ms
+                }
+                self._emit("step_failed", step["id"])
+                
+                # On-failure handling: abort | retry | continue
+                if step.get("on_failure", "abort") == "abort":
+                    raise
+                elif step.get("on_failure") == "retry":
+                    # Retry logic (3 attempts by default)
+                    pass
+                # continue: skip to next step
+        
+        return {
+            "status": "completed",
+            "step_results": context.steps,
+            "outputs": context.outputs,
+            "total_cost_usd": context.total_cost,
+            "duration_ms": time.time() - context.start_time
+        }
+    
+    async def _execute_step(self, step_type: str, step: dict, inputs: dict, context: dict) -> dict:
+        if step_type == "task":
+            # Execute skill via Skill Dispatcher
+            return await workflow.execute_activity(
+                invoke_skill,
+                args=[step["skill_name"], inputs, context.tenant_id],
+                start_to_close_timeout=timedelta(minutes=5)
+            )
+        
+        elif step_type == "agent":
+            # Execute agent as child workflow
+            return await workflow.execute_child_workflow(
+                run_agent,
+                args=[step["agent_id"], inputs.get("prompt", ""), context.tenant_id],
+                start_to_close_timeout=timedelta(minutes=15)
+            )
+        
+        elif step_type == "hitl":
+            # Pause for human approval
+            decision = await workflow.execute_activity(
+                hitl_approval,
+                args=[step["prompt"], inputs, context.tenant_id],
+                start_to_close_timeout=timedelta(hours=1)
+            )
+            return decision
+        
+        elif step_type == "branch":
+            # Conditional branching
+            condition = step.get("condition", "true")
+            resolved_condition = resolve_condition(condition, context)
+            
+            if resolved_condition:
+                return await self._execute_steps(step["branches"]["true"], context)
+            else:
+                return await self._execute_steps(step["branches"]["false"], context)
+        
+        elif step_type == "parallel":
+            # Fan-out N sub-steps, join on completion
+            parallel_results = {}
+            for psub in step["parallel_steps"]:
+                result = await workflow.execute_activity(
+                    ... (execute in parallel)
+                )
+                parallel_results[psub["id"]] = result
+            return parallel_results
+        
+        elif step_type == "wait":
+            # Wait for external event with timeout
+            signal = await workflow.wait_condition(
+                lambda: self._hitl_decision is not None,
+                timeout=timedelta(minutes=step.get("timeout_minutes", 60))
+            )
+            return signal
+```
+
+---
+
+## 2.1 Trigger Mechanisms Architecture
+
+The platform supports four orthogonal trigger types for workflows. Each enforces multi-tenancy and idempotency.
+
+### 2.1a Manual Trigger
+
+**API Endpoint**: `POST /api/v1/workflows/{workflow_id}/trigger`
+
+**Flow**:
+1. Client POSTs to endpoint with `X-Tenant-ID` header and input payload
+2. Workflow Service validates workflow exists for tenant
+3. Generates unique `run_id` (UUID)
+4. Dispatches to Temporal: `client.execute_workflow(HybridWorkflow, args=[request])`
+5. Returns `{ run_id, status: "queued", ... }`
+6. Client polls `GET /api/v1/workflow-runs/{run_id}` for status
+
+**Idempotency**: None for manual triggers (each POST is a new run)
+
+### 2.1b Webhook Trigger
+
+**API Endpoint**: `POST /webhook/{workflow_id}` (no auth, HMAC-validated)
+
+**Headers**:
+- `X-Signature`: HMAC-SHA256(request_body, tenant_webhook_secret)
+- `X-Timestamp`: ISO 8601 timestamp (must be < 5 min old)
+- `Idempotency-Key`: UUID (24-hour dedup window)
+
+**Flow**:
+1. External system (PagerDuty, Jira, custom) sends HTTP POST to webhook endpoint
+2. API Gateway validates HMAC signature: `HMAC-SHA256(body) == X-Signature`
+3. Validates timestamp (5-minute replay window)
+4. Checks Idempotency-Key in Redis:
+   - If present: return cached `run_id` (idempotent)
+   - If new: create new run, store in Redis with 24h TTL
+5. Dispatches workflow with webhook payload as inputs
+6. Returns `{ run_id, status: "queued" }`
+
+**Error Handling**: 
+- 400 Bad Request: Missing/invalid signature
+- 409 Conflict: Duplicate Idempotency-Key (returns cached response)
+- 429 Too Many Requests: Rate limit exceeded per tenant
+
+### 2.1c Cron Trigger
+
+**API Definition** (at workflow registration):
+```yaml
+trigger:
+  type: cron
+  cron: "0 17 * * 1-5"  # Weekdays at 5pm
+```
+
+**Flow**:
+1. Workflow Service validates cron expression at registration
+2. Creates Temporal Schedule using `ScheduleClient`:
+   ```python
+   await schedule_client.create_schedule(
+       workflow_id,
+       ScheduleSpec(
+           cron_expressions=[cron_expr]
+       ),
+       ScheduleAction(start_workflow=...)
+   )
+   ```
+3. Temporal Scheduler automatically triggers at each cron interval
+4. Missed schedules (during service downtime) are caught up (at most 1 per period)
+5. Schedule state is persisted in Temporal server; no loss on restarts
+
+**Management**: Architects can pause/resume schedules via `POST /api/v1/workflows/{id}/pause`
+
+### 2.1d Event-Driven Trigger (Fan-Out)
+
+**Flow**:
+1. External caller POSTs event to `/api/v1/events` with event ID + payload
+2. Workflow Service looks up all workflows with matching event filters
+3. Dispatches workflow to all matching workflows in parallel (fan-out):
+   ```
+   Event ID: settlement.fail.detected
+   → Triggers: [settlement-risk-agent, settlement-escalation-workflow]
+   → Each runs independently in isolated Temporal execution
+   ```
+4. Event deduplication via Redis: same `event_id` within 24h returns cached results
+5. Execution isolation: failure in one workflow doesn't propagate to others
+
+---
+
+## 2.2 Expression Evaluator & Condition Engine
+
+The **Expression Evaluator** enables dynamic workflow logic via template variables and conditional branching. It is a deterministic, sandboxed evaluator with no LLM involvement.
+
+### 2.2a Template Variable Syntax
+
+**Syntax**: `{{ variable.path }}`
+
+**Supported Variable Scopes**:
+- `{{ inputs.X }}` — Caller-provided inputs
+- `{{ steps.step_id.output.field }}` — Step outputs (dot-path navigation)
+- `{{ steps.step_id.duration_ms }}` — Step metadata
+
+**Examples**:
+```
+# Input substitution
+prompt: "Client ID: {{ inputs.client_id }}, Risk Score: {{ steps.fetch-risk.output.score }}"
+
+# Nested object traversal
+workflow_input: "{{ steps.analyze.output.nested.deep.field }}"
+
+# Conditional (in branch condition)
+condition: "{{ steps.risk-score.output.risk_level == 'high' }}"
+```
+
+### 2.2b Condition Evaluation
+
+**Syntax**: `{{ condition_expression }}`
+
+**Supported Operators**:
+- **Equality**: `==`, `!=`
+- **Comparison**: `<`, `>`, `<=`, `>=`
+- **Logical**: `AND`, `OR`
+- **Type coercion**: Strings, numbers, booleans, null
+
+**Examples**:
+```yaml
+# Simple comparison
+condition: "{{ steps.risk-analysis.output.risk_level == 'high' }}"
+
+# Numeric comparison
+condition: "{{ steps.cost-calc.output.total_cost >= 1000 }}"
+
+# Compound conditions
+condition: "{{ steps.validation.output.valid == true AND steps.approval.output.approved == true }}"
+
+# AND/OR chaining
+condition: "{{ steps.risk.output.level > 5 OR steps.manual-flag.output.escalate == true }}"
+```
+
+### 2.2c Implementation: Expression Evaluator Service
+
+**File**: `services/agent-workers/expression.py`
+
+```python
+class ExpressionEvaluator:
+    def resolve_template(self, template: str, context: WorkflowContext) -> str:
+        """Substitute {{ }} variables in template."""
+        pattern = r'{{\s*([^}]+)\s*}}'
+        
+        def replace_var(match):
+            var_path = match.group(1).strip()
+            try:
+                return str(self._resolve_path(var_path, context))
+            except KeyError:
+                raise ExpressionError(f"Variable not found: {var_path}")
+        
+        return re.sub(pattern, replace_var, template)
+    
+    def evaluate_condition(self, condition: str, context: WorkflowContext) -> bool:
+        """Evaluate {{ condition }} and return boolean."""
+        # Remove {{ }} wrapper
+        expr = condition.strip().removeprefix('{{').removesuffix('}}').strip()
+        
+        # Parse and evaluate (no code execution)
+        return self._evaluate_expr(expr, context)
+    
+    def _resolve_path(self, path: str, context: WorkflowContext) -> Any:
+        """Resolve dot-path: steps.step_id.output.field"""
+        parts = path.split('.')
+        
+        if parts[0] == 'inputs':
+            obj = context.inputs
+        elif parts[0] == 'steps':
+            step_id = parts[1]
+            obj = context.steps[step_id]
+        else:
+            raise ExpressionError(f"Unknown scope: {parts[0]}")
+        
+        # Traverse remaining path
+        for part in parts[2:]:
+            obj = obj[part]
+        
+        return obj
+    
+    def _evaluate_expr(self, expr: str, context: WorkflowContext) -> bool:
+        """Parse and evaluate: "A == B", "X > Y", "A AND B", etc."""
+        # Handle AND/OR
+        if ' AND ' in expr:
+            parts = expr.split(' AND ')
+            return all(self._evaluate_expr(p.strip(), context) for p in parts)
+        
+        if ' OR ' in expr:
+            parts = expr.split(' OR ')
+            return any(self._evaluate_expr(p.strip(), context) for p in parts)
+        
+        # Handle comparison operators
+        for op in ['==', '!=', '<=', '>=', '<', '>']:
+            if f' {op} ' in expr:
+                left_str, right_str = expr.split(f' {op} ', 1)
+                left = self._evaluate_operand(left_str.strip(), context)
+                right = self._evaluate_operand(right_str.strip(), context)
+                
+                if op == '==': return left == right
+                elif op == '!=': return left != right
+                elif op == '<': return left < right
+                elif op == '>': return left > right
+                elif op == '<=': return left <= right
+                elif op == '>=': return left >= right
+        
+        raise ExpressionError(f"Invalid condition: {expr}")
+    
+    def _evaluate_operand(self, operand: str, context: WorkflowContext) -> Any:
+        """Evaluate a single operand (variable, literal, etc.)."""
+        # Resolve variables
+        if operand.startswith('{{'):
+            return self.resolve_template(operand, context)
+        
+        # Parse literals
+        if operand == 'true': return True
+        if operand == 'false': return False
+        if operand == 'null': return None
+        
+        try:
+            return int(operand)
+        except ValueError:
+            pass
+        
+        try:
+            return float(operand)
+        except ValueError:
+            pass
+        
+        # String literals (quoted or unquoted)
+        if operand.startswith('"') and operand.endswith('"'):
+            return operand[1:-1]
+        if operand.startswith("'") and operand.endswith("'"):
+            return operand[1:-1]
+        
+        # Unquoted string
+        return operand
+```
+
+### 2.2d Pre-Validation at Registration
+
+All expressions are validated at workflow registration time (not runtime):
+
+1. **Template Variables**: Check all `{{ variable }}` paths exist in schema
+2. **Condition Syntax**: Parse all conditions for syntax errors
+3. **Type Safety**: Verify comparison operands are compatible types
+
+Invalid expressions result in `400 Bad Request` with a detailed error message.
+
+---
+
+## 2.3 Multi-Tenant RLS for Workflows
+
+All workflow data is tenant-isolated via PostgreSQL Row-Level Security (RLS) policies.
+
+### 2.3a Database Schema
+
+```sql
+CREATE TABLE workflow_registrations (
+    id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    name TEXT,
+    description TEXT,
+    workflow_type TEXT NOT NULL DEFAULT 'yaml',  -- 'yaml' | 'code'
+    workflow_class TEXT,  -- For type='code': class name
+    task_queue TEXT NOT NULL,
+    definition JSONB,  -- For type='yaml': parsed WorkflowDefinition
+    input_schema JSONB,
+    trigger_config JSONB,  -- { type, cron?, webhook_secret? }
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (id, tenant_id)
+);
+
+CREATE TABLE workflow_runs (
+    run_id TEXT PRIMARY KEY,
+    workflow_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    current_step_id TEXT,
+    step_results JSONB DEFAULT '{}',
+    inputs JSONB,
+    output JSONB,
+    error TEXT,
+    temporal_workflow_id TEXT,
+    temporal_run_id TEXT,
+    started_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    cost_usd NUMERIC(10, 4),
+    FOREIGN KEY (workflow_id, tenant_id) REFERENCES workflow_registrations(id, tenant_id)
+);
+
+CREATE TABLE hitl_approvals (
+    id TEXT PRIMARY KEY,
+    workflow_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    context JSONB,
+    status TEXT DEFAULT 'pending',  -- pending | approved | denied | expired
+    approved_by TEXT,
+    approved_at TIMESTAMPTZ,
+    denial_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    FOREIGN KEY (workflow_id, tenant_id) REFERENCES workflow_registrations(id, tenant_id),
+    FOREIGN KEY (run_id, tenant_id) REFERENCES workflow_runs(run_id, tenant_id)
+);
+
+-- RLS Policy: Only tenant can access their workflows
+CREATE POLICY tenant_isolation_workflows ON workflow_registrations
+    USING (tenant_id = current_setting('app.tenant_id'));
+
+CREATE POLICY tenant_isolation_runs ON workflow_runs
+    USING (tenant_id = current_setting('app.tenant_id'));
+
+CREATE POLICY tenant_isolation_hitl ON hitl_approvals
+    USING (tenant_id = current_setting('app.tenant_id'));
+```
+
+### 2.3b Application Layer Enforcement
+
+Every Workflow Service API call sets the tenant context:
+
+```go
+// Workflow Service (port 8094)
+func (s *Server) GetWorkflow(w http.ResponseWriter, r *http.Request) {
+    tenantID := r.Header.Get("X-Tenant-ID")
+    
+    // Set RLS context for this transaction
+    row := s.db.QueryRowContext(
+        pq.WithUserContext(r.Context(), tenantID),
+        "SELECT ... FROM workflow_registrations WHERE id = $1",
+        workflowID,
+    )
+    // RLS policy automatically filters: only rows matching tenant_id are visible
+}
+```
+
+### 2.3c Cost Attribution & Isolation
+
+Cost tracking is per-tenant:
+
+```python
+# Each step execution updates cost_events in TimescaleDB
+@dataclass
+class CostEvent:
+    tenant_id: str
+    workflow_id: str
+    run_id: str
+    step_id: str
+    step_type: str  # task | agent | hitl
+    cost_usd: float
+    tokens: int
+    execution_time_ms: int
+    timestamp: datetime
+
+# Query for tenant-scoped cost dashboard
+SELECT tenant_id, workflow_id, SUM(cost_usd) 
+FROM cost_events 
+WHERE tenant_id = 'acme' AND created_at > NOW() - INTERVAL '30 days'
+GROUP BY workflow_id
+ORDER BY SUM(cost_usd) DESC
+```
+
+### 2.3d Quota Enforcement
+
+Hard quota limits prevent one tenant from exhausting platform resources:
+
+```
+Tenant quota: { monthly_budget_usd: 1000, concurrent_workflows: 50 }
+
+At trigger time:
+1. Check: current_month_cost + step_cost <= monthly_budget
+   → If exceeded: return 429 QuotaExceeded
+2. Check: running_workflows < concurrent_workflows
+   → If exceeded: queue with Retry-After header
+```
+
+---
+
+**End of Hybrid Workflow Architecture**

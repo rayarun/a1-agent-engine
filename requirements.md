@@ -191,6 +191,46 @@ To contextualize the platform's requirements, the following journeys illustrate 
 
 * **Step 6:** Both customers independently refine their domain models using KG-Architect, creating specialized ontologies for their business domains. The shared platform infrastructure ensures isolation, scalability, and consistency.
 
+### Journey 11: Hybrid Workflow with Cron Trigger, HITL, and Cost Tracking (Persona: Fintech Operations / Architect)
+
+* **Step 1:** A Fintech Operations team needs a daily settlement reconciliation workflow. They define it in YAML and register it via Agent Studio → Workflows → New Workflow.
+
+* **Step 2:** The workflow definition specifies:
+  - **Trigger**: Cron schedule "0 17 * * 1-5" (weekdays at 5pm)
+  - **Steps**:
+    1. Fetch trades from NSE (task: invoke_skill "fetch-nse-trades")
+    2. Analyze settlement risk (agent: run_agent "settlement-risk-agent")
+    3. If risk detected, seek approval (hitl: "High-risk settlement. Approve?")
+    4. File regulatory report (task: invoke_skill "file-regulatory-report")
+
+* **Step 3:** Platform validates the YAML, registers the workflow, and creates a Temporal Schedule for the cron expression. The workflow is now in `active` status.
+
+* **Step 4:** At 5pm on the next business day, Temporal automatically triggers the workflow via the schedule. The workflow runs on the `platform-hybrid-queue` (managed worker).
+
+* **Step 5:** Step 1 (fetch trades) executes successfully, returning 500 trades. Step 2 (agent) runs the settlement-risk-agent, which consumes 2,000 input tokens and 1,500 output tokens (cost attributed to the workflow run).
+
+* **Step 6:** Step 2 output indicates high risk. The workflow branches to Step 3 (HITL gate). The workflow enters `paused_awaiting_approval` state. An alert is sent to the Approver Slack channel with a link to Agent Studio.
+
+* **Step 7:** A Senior Analyst opens Agent Studio → Workflow Runs → [workflow-run-id] and reviews the execution trace:
+  - Step 1: Completed (500 trades fetched, 150ms duration)
+  - Step 2: Completed (Risk detected: 45 high-value trades, 12s duration, $0.15 cost)
+  - Step 3: Awaiting Approval (shows the HITL prompt and context)
+
+* **Step 8:** The Analyst clicks "Approve" (with MFA). The workflow resumes at Step 3.
+
+* **Step 4:** Step 4 (file-regulatory-report) executes successfully, filing the report to the regulatory body.
+
+* **Step 9:** The workflow completes. The run is marked `completed` in the database. Cost aggregation:
+  - Step 1: $0.01 (task execution)
+  - Step 2: $0.15 (agent reasoning + tokens)
+  - Step 3: $0.00 (HITL gate, human approval)
+  - Step 4: $0.02 (task execution)
+  - **Total**: $0.18
+
+* **Step 10:** The following day, the Fintech team views the cost dashboard in Admin Console and sees: "settlement-workflow: $0.18 cost over 5 runs this week" with a drill-down showing per-run and per-step breakdowns.
+
+* **Step 11:** (Future iteration) The team creates a second workflow variant for a different settlement venue. Both workflows run independently on their own schedules, with isolated cost tracking per workflow. Multi-tenancy ensures no cost or data leakage to other customers.
+
 ## 3. Functional Requirements (FR)
 
 These requirements define the core capabilities of the platform, prioritized for an MVP to Production roadmap.
@@ -226,6 +266,23 @@ These requirements define the core capabilities of the platform, prioritized for
 | **FR26** | **P1** | **Knowledge Graph Workspace (Agent Studio)** | Agent Studio provides a dedicated "Knowledge Graphs" workspace (port 3000) for domain architects to design, build, visualize, and manage tenant knowledge graphs. The workspace includes: (1) **KG List** — browse all tenant KGs, create new graphs, delete/archive; (2) **KG Builder** — natural-language chat interface with KG-Architect system agent, real-time graph preview, iteration history, undo/redo; (3) **KG Visualizer** — interactive graph canvas with search/filter, node inspection, relationship traversal, statistics, and export (JSON/PNG); (4) **Multi-KG Support** — architects manage multiple domain KGs (one per vertical: DevOps, Fintech, Healthcare). Multi-tenant isolation enforced via RLS at KG Service layer. |
 | **FR27** | **P2** | **Knowledge Graph Management UI (Admin Console)** | Admin Console provides `/knowledge-graphs` page for cross-tenant KG administration: list all tenant KGs, view aggregate KG statistics, inspect specific tenant graphs (read-only), search entities across tenants, view relationship patterns. For operators to understand platform KG usage; architects use Agent Studio workspace instead. |
 | **FR28** | **P1** | **KG-Architect System Agent Integration** | KG-Architect system agent is embedded in Agent Studio KG Builder as a conversational interface. Agent runs on isolated `platform-system-agent-queue`. Architects describe domain structure in natural language; agent iteratively calls kg-* tools (kg-create-graph, kg-add-node, kg-add-edge, kg-query) to build ontology. Agent provides: (1) Structured steps shown in iteration history, (2) Real-time graph preview as changes are made, (3) Confirmation prompts before destructive operations, (4) Ability to refine with follow-up instructions, (5) Export of generated KG for documentation. Streaming responses via SSE for real-time chat interaction. |
+| **FR29** | **P0** | **Hybrid Workflow Authoring (YAML)** | Platform supports declarative workflow definition via YAML. Workflows specify: `id`, `version`, `trigger` (manual/webhook/cron/event), `steps` (task/agent/hitl/branch/parallel/wait). Steps support: `depends_on` for DAG sequencing, `input_mapping` with {{ }} template variables, `condition` for branching, `timeout` for step-level SLOs. YAML is validated at registration time; invalid workflows are rejected with structured error messages. Workflows can be deployed via API or Agent Studio UI. |
+| **FR30** | **P0** | **Hybrid Workflow Execution (HybridWorkflow Class)** | Platform provides `HybridWorkflow` Temporal workflow class that executes declarative YAML workflow definitions. Execution model: load workflow definition, topologically sort steps, execute each step (task/agent/hitl/branch/parallel/wait), collect results, handle failures. Step results stored in `workflow_runs.step_results` as JSON. Failed steps are recorded with error messages; on-failure action (abort/retry/continue) determines workflow continuation. All execution is backed by Temporal for durability. |
+| **FR31** | **P0** | **Expression Evaluator & {{ }} Templates** | Platform provides deterministic expression evaluator for workflow templates. Syntax: `{{ variable }}` for substitution (e.g., `{{ inputs.date }}`), `{{ condition }}` for branching. Supports: dot-path resolution (inputs.X, steps.Y.output.Z), string/number/boolean/null values, operators (==, !=, <, >, <=, >=, AND, OR). Expressions pre-validated at workflow registration; no runtime code execution. Invalid expressions fail with structured errors. |
+| **FR32** | **P0** | **Four Trigger Mechanisms** | Platform supports four orthogonal trigger types: (1) **Manual** — `POST /api/v1/workflows/{id}/trigger`; (2) **Webhook** — HTTP POST to `/webhook/{id}` with HMAC-SHA256 validation; (3) **Cron** — Temporal Schedule based on cron expression (e.g., "0 17 * * 1-5"); (4) **Event-Driven** — Trigger multiple workflows from single event via event ID matching and fan-out. Each trigger type enforces multi-tenant isolation. |
+| **FR33** | **P0** | **Webhook Trigger with HMAC Validation** | Webhook triggers validate HMAC-SHA256 signature computed over request body with tenant-specific secret. Headers: `X-Signature`, `X-Timestamp` (5-minute replay window), `Idempotency-Key` (24-hour deduplication). Valid webhooks are dispatched to the appropriate task queue; invalid signatures return 401 Unauthorized. Duplicate events within the idempotency window return cached workflow response. |
+| **FR34** | **P0** | **Cron Schedule Trigger** | Cron-triggered workflows use Temporal Schedules for reliable scheduling. Cron expression is validated at workflow registration (CRON format: `minute hour day-of-month month day-of-week`). Schedules handle missed intervals (at most one catch-up execution per missed period). Schedule state is persisted in Temporal server; no loss on restarts. Architects can pause/resume schedules via API. |
+| **FR35** | **P0** | **Event-Driven Trigger (Fan-Out Pattern)** | Event-triggered workflows support fan-out: a single event can trigger multiple registered workflows. Platform matches event ID (provided by caller) to registered workflows using event filters. Each workflow execution is isolated; failures in one don't cascade. Event deduplication via event ID ensures idempotency (same event_id within 24h returns cached results). |
+| **FR36** | **P0** | **Workflow Service API** | Platform provides RESTful workflow management API on port 8094: **Workflow Registry** — POST/GET/PUT/DELETE `/api/v1/workflows`; **Trigger** — POST `/api/v1/workflows/{id}/trigger`; **Runs** — GET `/api/v1/workflows/{id}/runs`, GET `/api/v1/workflow-runs/{run_id}`; **Events** — GET `/api/v1/workflow-runs/{run_id}/events` (proxies Temporal events); **Management** — POST `/api/v1/workflows/{id}/transition` (pause/resume). All endpoints enforce X-Tenant-ID header for multi-tenancy. |
+| **FR37** | **P1** | **Workflow Step Types** | Hybrid workflows support six step types: (1) **task** — Execute registered skill; (2) **agent** — Run AI agent as child workflow; (3) **hitl** — Pause for human approval; (4) **branch** — Conditional step with true/false branches; (5) **parallel** — Fan-out multiple steps, join on completion; (6) **wait** — Pause until external event arrives or timeout. Each step type has typed inputs/outputs and retry semantics. |
+| **FR38** | **P1** | **Workflow Orchestration Features** | Workflows support: **DAG Execution** — steps can declare `depends_on` for partial ordering; **Conditional Branching** — `branch` step with {{ }} condition; **Parallel Execution** — `parallel` step type fan-outs N sub-steps; **Error Handling** — per-step `on_failure` action (abort/retry/continue); **Timeouts** — per-step and workflow-level SLOs; **Composition** — steps can invoke agents or child workflows. |
+| **FR39** | **P1** | **HITL Gate in Workflows** | Workflow `hitl` step pauses execution pending human approval. Approver receives: step ID, prompt, context (structured data for review). Approval timeout (configurable, default 1h) results in auto-denial if not acted. Approval decision is persisted to `hitl_approvals` table with approver identity, timestamp, and reasoning. Workflow resumes exactly at the HITL step after approval. |
+| **FR40** | **P1** | **Python SDK (a1-agent-sdk)** | Platform exposes Python SDK for developers writing Temporal workflows. SDK provides 8 re-exported platform activities: `invoke_skill`, `invoke_tool`, `invoke_mcp_tool`, `run_agent`, `hitl_approval`, `kg_search`, `kg_query`, `notify`. Developers import from `a1_agent_sdk` and register via `get_platform_activities()` helper. SDK activities enforce multi-tenancy via `tenant_id` parameter; all activities are Temporal-compatible with typed inputs/outputs. ✅ **Implemented (Phase A)** |
+| **FR41** | **P1** | **Workflow Cost Attribution** | Every workflow step (task/agent/hitl) has associated costs: LLM tokens (if agent step), MCP server calls, task execution time. Costs are aggregated per step, per workflow run, per agent (for agent steps), and per tenant. Cost data stored in TimescaleDB (`cost_events` table) with: `tenant_id`, `workflow_id`, `run_id`, `step_id`, `cost_usd`, `tokens`, `timestamp`. Costs visible in workflow detail UI and queryable via Admin API. |
+| **FR42** | **P1** | **Workflow History & Run Tracking** | Platform tracks all workflow runs with state: `pending` → `running` → `completed|failed`. Runs stored in `workflow_runs` table with: `run_id`, `workflow_id`, `tenant_id`, `status`, `step_results` (JSON), `inputs`, `output`, `error`, `started_at`, `completed_at`. Run state is synced from Temporal + persisted to DB. Architects can view run history, step-by-step results, and error details in Agent Studio. |
+| **FR43** | **P1** | **Workflow Execution Trace UI** | Agent Studio includes workflow execution trace visualizer showing DAG of steps, per-step execution time, status badges (completed/failed/pending), step outputs as JSON, and error messages. Trace can be exported for audit. For parallel steps, shows swimlanes with fork/join edges. Clicking a failed step shows error context. HITL steps highlight approver action required. |
+| **FR44** | **P1** | **Developer Workflow Registration** | Developers can register custom Python Temporal workflows (written with `@workflow.defn`) via workflow-service API or Agent Studio. Registration specifies: workflow class name, task queue, input schema, description. Platform can then trigger registered workflows via REST API or webhook, even if code runs on developer-owned workers. Developer benefits from platform audit, cost tracking, and multi-tenancy features. |
+| **FR45** | **P1** | **Workflow Versioning & Lifecycle** | Workflows support versioning (semver): registration creates a new version or updates existing. Workflow state machine: `draft` → `active` → `paused` → `archived`. Version history is tracked; architects can view past versions and rollback if needed. Active version is the only one triggered; all runs reference their triggering version for reproducibility. |
 
 ## 4. Non-Functional Requirements (NFR)
 
@@ -246,6 +303,379 @@ These requirements dictate the operational, security, and resiliency standards (
 | **NFR11** | **P1** | **Multi-Tenancy Isolation** | All platform resources — agent manifests, tool registrations, skill definitions, sub-agent contracts, team manifests, execution traces, and vector memories — are strictly isolated per tenant via separate PostgreSQL schemas and row-level security. A runaway workflow or quota breach in one tenant cannot consume resources allocated to another tenant. |
 | **NFR12** | **P1** | **SLA & Availability** | The platform targets 99.95% availability for the API Gateway and Agent Studio. Performance SLOs: p99 workflow invocation latency ≤ 2s; p95 tool execution latency ≤ 5s. Disaster recovery targets: RTO ≤ 1 hour, RPO ≤ 15 minutes. Sustained SLO breaches trigger automated escalation and disable non-critical background processing. |
 | **NFR13** | **P1** | **Session & Memory Lifecycle** | Sessions carry a configurable hard timeout (default 24h) and idle timeout (default 1h). Each session enforces a memory budget (default 512MB): purge policy activates at 80% utilization; workflow terminates with a structured `OutOfMemory` error at 100%. Vector embeddings are retained for a configurable duration per tenant (default 90 days) and then archived to cold storage. |
+| **NFR14** | **P1** | **Hybrid Workflow Execution Latency** | Workflow trigger-to-start latency: p99 ≤ 1s for manual triggers, p99 ≤ 5s for webhook-based triggers (HMAC validation overhead). Step execution latency (including task + agent steps): p95 ≤ 10s. HITL approval gate must not block other workflows; approval can occur asynchronously with timeout constraints. |
+| **NFR15** | **P0** | **Workflow Multi-Tenancy & RLS** | All workflow data (registrations, runs, step results, costs) are tenant-isolated via PostgreSQL RLS policies on `tenant_id` column. Cross-tenant queries return empty results at database layer. Tenants cannot enumerate, trigger, or inspect workflows from other tenants. Cost tracking is per-tenant; one tenant's workflow spending cannot affect another tenant's quota. |
+| **NFR16** | **P1** | **Expression Evaluator Safety** | The expression evaluator supports only deterministic operations: dot-path resolution, string/number/boolean comparisons, and basic operators (==, !=, <, >, <=, >=, AND, OR). No code execution, loops, or state mutation allowed. Invalid expressions fail gracefully with structured error messages. All expressions are pre-validated at workflow registration time. |
+| **NFR17** | **P1** | **HITL Approval Durability** | HITL approvals are persisted to PostgreSQL `hitl_approvals` table (not in-memory). Workflow execution can resume after service restarts. Approval decisions include: approver identity, timestamp, audit trail, and reasoning. Approval timeout (configurable, default 1 hour) auto-denies if not acted upon; workflow records the timeout as a structured denial reason. |
+| **NFR18** | **P1** | **Cron Trigger Reliability** | Cron-triggered workflows use Temporal Schedules for reliable scheduling. Missed schedules due to service downtime are caught up (at most one catch-up execution per missed interval). Cron expressions are validated at workflow registration; invalid expressions are rejected with clear error messages. Schedule state is persisted in Temporal server; no loss of scheduling state on restarts. |
+| **NFR19** | **P1** | **Event-Driven Fan-Out Scalability** | Event-triggered workflows support fan-out to multiple registered workflows with tenant isolation per execution. Fan-out dispatch latency (N workflows): p95 ≤ 100ms + workflow trigger latency. Event deduplic ation via event ID ensures idempotency (same event_id within 24h returns cached results). Fan-out failures in one workflow don't propagate to others. |
+| **NFR20** | **P0** | **Cost Tracking for Hybrid Workflows** | Every workflow step (task, agent, hitl) has associated cost attributes: LLM tokens (if step runs agent), task execution time, MCP server calls. Costs are aggregated per step, per workflow run, and per tenant. Cost data is persisted in TimescaleDB for historical queries, reporting, and quota enforcement. Per-step cost is available in workflow_runs.step_results for granular analysis. |
+
+## 5. Platform SDK (a1-agent-sdk) Capabilities
+
+The **a1-agent-sdk** is a Python package that exposes platform primitives as Temporal activities, enabling developers to write hybrid workflows that leverage platform capabilities without reimplementing them.
+
+### SDK Activities Reference
+
+Each activity is a Temporal-compatible async function with typed inputs/outputs, configurable timeouts, and retry semantics. All activities enforce multi-tenant isolation via `tenant_id` parameter.
+
+#### 1. invoke_skill(skill_name: str, args: dict, tenant_id: str, timeout_seconds: int = 300) → dict
+
+**Purpose**: Execute a registered platform skill.
+
+**Input Schema**:
+```json
+{
+  "skill_name": "string (required)",
+  "args": {"type": "object"},
+  "tenant_id": "string (required)",
+  "timeout_seconds": "integer (default 300)"
+}
+```
+
+**Output Schema**:
+```json
+{
+  "success": "boolean",
+  "output": {"type": "object"},
+  "error": "string (if failed)",
+  "duration_ms": "integer",
+  "cost_metadata": {
+    "tokens": "integer",
+    "execution_time_ms": "integer"
+  }
+}
+```
+
+**Use Case**: Execute pre-configured skill bundles (e.g., "incident-triage-skill", "db-query-skill"). Skips tool registration/approval overhead by leveraging already-approved skill definitions.
+
+**Example**:
+```python
+result = await workflow.execute_activity(
+    invoke_skill,
+    args=["incident-triage-skill", {"alert_id": "P1-123"}, "acme-tenant"],
+    start_to_close_timeout=timedelta(minutes=5),
+)
+```
+
+---
+
+#### 2. invoke_tool(tool_name: str, args: dict, tenant_id: str, mutating: bool = False, timeout_seconds: int = 60) → dict
+
+**Purpose**: Execute a registered tool directly (bypasses skill composition).
+
+**Input Schema**:
+```json
+{
+  "tool_name": "string (required)",
+  "args": {"type": "object"},
+  "tenant_id": "string (required)",
+  "mutating": "boolean (default false)",
+  "timeout_seconds": "integer (default 60)"
+}
+```
+
+**Output Schema**:
+```json
+{
+  "success": "boolean",
+  "output": {"type": "object"},
+  "error": "string (if failed)",
+  "duration_ms": "integer"
+}
+```
+
+**Use Case**: Execute a specific tool without wrapping it in a skill. Useful for one-off operations (e.g., fetch data from API, run diagnostic command).
+
+**Example**:
+```python
+result = await workflow.execute_activity(
+    invoke_tool,
+    args=["fetch-metrics", {"service": "api-gateway", "duration": "1h"}, "acme-tenant"],
+    start_to_close_timeout=timedelta(minutes=2),
+)
+```
+
+---
+
+#### 3. invoke_mcp_tool(server_name: str, tool_name: str, args: dict, tenant_id: str, timeout_seconds: int = 120) → dict
+
+**Purpose**: Call an external MCP server tool directly (deterministic, no LLM).
+
+**Input Schema**:
+```json
+{
+  "server_name": "string (required, e.g., 'pagerduty-mcp')",
+  "tool_name": "string (required)",
+  "args": {"type": "object"},
+  "tenant_id": "string (required)",
+  "timeout_seconds": "integer (default 120)"
+}
+```
+
+**Output Schema**:
+```json
+{
+  "success": "boolean",
+  "output": {"type": "object"},
+  "error": "string (if failed)",
+  "duration_ms": "integer",
+  "source": "string (mcp_server_id)"
+}
+```
+
+**Use Case**: Query external data sources (PagerDuty, Jira, Datadog) during workflow execution. Returns raw tool result without LLM inference, enabling deterministic Temporal workflow semantics.
+
+**Example**:
+```python
+alerts = await workflow.execute_activity(
+    invoke_mcp_tool,
+    args=["pagerduty-mcp", "get_active_incidents", {"limit": 10}, "acme-tenant"],
+    start_to_close_timeout=timedelta(minutes=2),
+)
+```
+
+---
+
+#### 4. run_agent(agent_id: str, prompt: str, tenant_id: str, context: dict = None, timeout_seconds: int = 900) → dict
+
+**Purpose**: Execute a registered AI agent as a Temporal child workflow.
+
+**Input Schema**:
+```json
+{
+  "agent_id": "string (required)",
+  "prompt": "string (required, initial message)",
+  "tenant_id": "string (required)",
+  "context": {"type": "object (optional)"},
+  "timeout_seconds": "integer (default 900)"
+}
+```
+
+**Output Schema**:
+```json
+{
+  "success": "boolean",
+  "output": {"type": "object"},
+  "reasoning_steps": [
+    {
+      "step": "integer",
+      "thought": "string",
+      "action": "string",
+      "observation": "string"
+    }
+  ],
+  "error": "string (if failed)",
+  "duration_ms": "integer",
+  "tokens_used": {
+    "input": "integer",
+    "output": "integer"
+  },
+  "cost_usd": "number"
+}
+```
+
+**Use Case**: Delegate complex reasoning tasks to an AI agent. The agent runs independently with its own durable workflow, parallel to other steps.
+
+**Example**:
+```python
+analysis = await workflow.execute_activity(
+    run_agent,
+    args=["settlement-risk-agent", f"Analyze trades: {trades}", "acme-tenant"],
+    start_to_close_timeout=timedelta(minutes=15),
+)
+```
+
+---
+
+#### 5. hitl_approval(prompt: str, context: dict, tenant_id: str, timeout_minutes: int = 60) → bool
+
+**Purpose**: Pause workflow execution and wait for human approval.
+
+**Input Schema**:
+```json
+{
+  "prompt": "string (required, approval message for human)",
+  "context": {"type": "object (required, what the human reviews)"},
+  "tenant_id": "string (required)",
+  "timeout_minutes": "integer (default 60)"
+}
+```
+
+**Output Schema**:
+```json
+{
+  "approved": "boolean",
+  "approver_id": "string",
+  "approved_at": "string (ISO 8601)",
+  "denial_reason": "string (if denied)",
+  "timeout": "boolean (true if timed out, defaults to denial)"
+}
+```
+
+**Use Case**: Gate mutating operations (resource deletion, financial transactions) pending human review. Entire workflow pauses; other workflows continue independently.
+
+**Example**:
+```python
+approved = await workflow.execute_activity(
+    hitl_approval,
+    args=[
+        "Review and approve pod restart",
+        {"affected_pods": ["pod-1", "pod-2"], "reason": "memory leak detected"},
+        "acme-tenant"
+    ],
+    start_to_close_timeout=timedelta(hours=1),
+)
+if not approved:
+    raise Exception("Remediation denied by approver")
+```
+
+---
+
+#### 6. kg_search(graph_id: str, query: str, limit: int = 10, tenant_id: str = None) → dict
+
+**Purpose**: Semantic search on knowledge graph entities using pgvector.
+
+**Input Schema**:
+```json
+{
+  "graph_id": "string (required)",
+  "query": "string (required, natural language query)",
+  "limit": "integer (default 10)",
+  "tenant_id": "string (required)"
+}
+```
+
+**Output Schema**:
+```json
+{
+  "results": [
+    {
+      "node_id": "string",
+      "node_type": "string",
+      "properties": {"type": "object"},
+      "similarity_score": "number (0-1)"
+    }
+  ],
+  "error": "string (if failed)"
+}
+```
+
+**Use Case**: Find relevant entities in the knowledge graph by semantic meaning (e.g., "services with SLA < 99%" or "databases experiencing high load").
+
+**Example**:
+```python
+services = await workflow.execute_activity(
+    kg_search,
+    args=["devops-infra", "services with SLA less than 99.5%", 5, "acme-tenant"],
+    start_to_close_timeout=timedelta(seconds=10),
+)
+```
+
+---
+
+#### 7. kg_query(graph_id: str, start_node_id: str, depth: int = 2, tenant_id: str = None) → dict
+
+**Purpose**: Graph traversal to find relationships and connected nodes.
+
+**Input Schema**:
+```json
+{
+  "graph_id": "string (required)",
+  "start_node_id": "string (required)",
+  "depth": "integer (default 2, max 5)",
+  "tenant_id": "string (required)"
+}
+```
+
+**Output Schema**:
+```json
+{
+  "nodes": [
+    {
+      "node_id": "string",
+      "node_type": "string",
+      "properties": {"type": "object"}
+    }
+  ],
+  "edges": [
+    {
+      "from": "string",
+      "to": "string",
+      "relationship_type": "string",
+      "properties": {"type": "object"}
+    }
+  ],
+  "error": "string (if failed)"
+}
+```
+
+**Use Case**: Understand blast radius and dependencies (e.g., "what services depend on this database?" or "what are all downstream services?").
+
+**Example**:
+```python
+dependents = await workflow.execute_activity(
+    kg_query,
+    args=["devops-infra", "postgres-prod", 2, "acme-tenant"],
+    start_to_close_timeout=timedelta(seconds=10),
+)
+```
+
+---
+
+#### 8. notify(channel: str, message: str, tenant_id: str, message_type: str = "info") → dict
+
+**Purpose**: Send notifications (Slack, email, Teams).
+
+**Input Schema**:
+```json
+{
+  "channel": "string (required, 'slack' | 'email' | 'teams')",
+  "message": "string (required, notification body)",
+  "tenant_id": "string (required)",
+  "message_type": "string (optional, 'info' | 'warning' | 'error')"
+}
+```
+
+**Output Schema**:
+```json
+{
+  "success": "boolean",
+  "message_id": "string",
+  "error": "string (if failed)"
+}
+```
+
+**Use Case**: Notify stakeholders at workflow milestones (completion, escalation, error).
+
+**Example**:
+```python
+await workflow.execute_activity(
+    notify,
+    args=["slack", f"Incident resolved: root cause was {root_cause}", "acme-tenant"],
+    start_to_close_timeout=timedelta(seconds=30),
+)
+```
+
+---
+
+### SDK Helper: get_platform_activities()
+
+Returns a list of all platform activities for easy worker registration:
+
+```python
+from a1_agent_sdk import get_platform_activities
+from temporalio.worker import Worker
+
+activities = get_platform_activities()
+worker = Worker(
+    client,
+    task_queue="acme-settlement-queue",
+    activities=activities,
+)
+```
+
+---
 
 ## 5. UI Mockups / Wireframe Structure
 

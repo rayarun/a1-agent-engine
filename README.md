@@ -68,6 +68,15 @@ A1 Agent Engine transforms how enterprises build and operate AI-driven automatio
 - **MCP Recommendations** — Curated external data source integrations (PagerDuty, Jira, Bloomberg) per vertical
 - **One-Click Import** — Admin Console wizard guides architects through cookbook selection, customization, and deployment
 
+**Hybrid Workflow Platform (NEW):**
+- **YAML-First Workflow Definition** — Declarative workflow authoring for non-developers with support for sequential, parallel, and conditional execution
+- **Platform SDK (a1-agent-sdk)** — Python SDK exposing 8 platform activities: invoke_skill, invoke_tool, invoke_mcp_tool, run_agent, hitl_approval, kg_search, kg_query, notify
+- **Four Trigger Mechanisms** — Manual (REST POST), Webhook (HMAC-SHA256 validated), Cron (Temporal Schedule), Event-Driven (fan-out pattern)
+- **Expression Evaluator** — {{ variable }} template syntax and {{ condition }} branching for dynamic workflow logic
+- **Multi-Tenant Workflows** — PostgreSQL RLS isolation ensures workflow data never leaks between tenants
+- **Cost Tracking** — Per-step and aggregate cost attribution for all workflow executions
+- **HITL Integration** — Human-in-the-loop approval gates pause workflow execution pending human decision with full context
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -114,10 +123,16 @@ python -m temporal.worker
 cd services/kg-service
 air
 
-# 8. Verify health
+# 8. Workflow Service (Terminal 7)
+cd services/workflow-service
+air
+# → http://localhost:8094
+
+# 9. Verify health
 curl http://localhost:8080/health
 curl http://localhost:8089/health
 curl http://localhost:8093/health
+curl http://localhost:8094/health
 ```
 
 **Note:** Frontends run on host, not Docker, for rapid development iteration. Admin API runs in Docker and is automatically started with `docker-compose up -d`.
@@ -612,6 +627,8 @@ Each KG is independent:
 | Admin API | 8089 | Go | Platform admin backend; tenant mgmt |
 | **Knowledge Graph** | | | |
 | KG Service | 8093 | Go | Knowledge Graph CRUD, traversal, semantic search |
+| **Hybrid Workflows** | | | |
+| Workflow Service | 8094 | Go | Workflow registry, trigger dispatch, run tracking |
 | **MCP Integration** | | | |
 | MCP Registry | 8090 | Go | External MCP server hub (client) |
 | MCP Server | 8091 | Go | Platform MCP endpoint (server) |
@@ -662,6 +679,7 @@ a1-agent-engine/
 │   ├── agent-registry/         # Agent manifest storage and versioning
 │   ├── admin-api/              # Platform governance backend (tenants, LLM config, cost)
 │   ├── kg-service/             # Knowledge Graph CRUD, traversal, semantic search
+│   ├── workflow-service/       # Hybrid workflow registry, trigger dispatch, run management
 │   ├── mcp-registry/           # External MCP server integration (client)
 │   ├── mcp-server/             # Platform MCP endpoint for external clients (server)
 │   ├── bash-executor/          # Code execution service for sandboxed operations
@@ -979,6 +997,151 @@ See [Apache 2.0 Full License](http://www.apache.org/licenses/LICENSE-2.0) for co
 ## 💬 Support
 
 For issues and feature requests, see the GitHub Issues tab or contact the maintainers.
+
+---
+
+## 🔄 Hybrid Workflow Platform
+
+### Overview
+
+The A1 Agent Engine includes a **Hybrid Workflow Platform** that enables both declarative (YAML) and imperative (Python SDK) workflow authoring. Workflows combine pure Temporal task pipelines with agentic reasoning in a single unified execution model.
+
+### Three Developer Profiles
+
+**Profile 1: YAML Developer (Low-Code)**
+Define workflows declaratively without writing code. Platform runs YAML workflows on the `platform-hybrid-queue`.
+
+```yaml
+id: client-onboarding
+version: 1.0.0
+trigger:
+  type: webhook
+steps:
+  - id: fetch-kyc
+    type: task
+    skill_name: fetch-kyc-data
+  - id: risk-score
+    type: agent
+    agent_id: risk-assessment-agent
+    input_mapping:
+      prompt: "Assess risk for client KYC: {{ steps.fetch-kyc.output }}"
+  - id: compliance-gate
+    type: hitl
+    prompt: "AI flagged high-risk. Review and approve onboarding."
+    condition: "{{ steps.risk-score.output.risk_level == 'high' }}"
+    timeout_minutes: 60
+  - id: confirm
+    type: task
+    skill_name: send-confirmation-email
+```
+
+**Profile 2: Python SDK Developer (Temporal-Native)**
+Write standard Temporal `@workflow.defn` + `@activity.defn` code. Import platform activities via the `a1-agent-sdk` package.
+
+```python
+from temporalio import workflow, activity
+from a1_agent_sdk import invoke_skill, run_agent, hitl_approval
+import asyncio
+
+@activity.defn
+async def validate_settlement(trades: list[dict]) -> dict:
+    large_trades = [t for t in trades if t["amount"] > 100]
+    return {"valid": len(large_trades) == 0}
+
+@workflow.defn
+class SettlementPipeline:
+    @workflow.run
+    async def run(self, params: dict) -> dict:
+        validation = await workflow.execute_activity(
+            validate_settlement,
+            args=[params["trades"]],
+            start_to_close_timeout=timedelta(minutes=5),
+        )
+        analysis = await workflow.execute_activity(
+            run_agent,
+            args=["settlement-agent", f"Analyze: {params}", params["tenant_id"]],
+            start_to_close_timeout=timedelta(minutes=15),
+        )
+        if analysis.get("anomaly_detected") or not validation["valid"]:
+            approved = await workflow.execute_activity(
+                hitl_approval,
+                args=["Risk team approval", {"analysis": analysis}, params["tenant_id"]],
+                start_to_close_timeout=timedelta(hours=1),
+            )
+            if not approved:
+                return {"status": "escalated"}
+        return {"status": "completed"}
+```
+
+**Profile 3: Multi-Language Developers**
+Register your Go or Java Temporal workflows with the platform. Platform can trigger them via REST API while they benefit from platform primitives (cost tracking, audit logging, multi-tenancy).
+
+### Platform SDK (a1-agent-sdk)
+
+Eight platform activities available for import:
+
+| Activity | Purpose | Notes |
+|----------|---------|-------|
+| `invoke_skill` | Execute platform skill | Routes through Skill Dispatcher |
+| `invoke_tool` | Execute registered tool | Direct tool invocation with validation |
+| `invoke_mcp_tool` | Call external MCP server tool | Deterministic, no LLM involved |
+| `run_agent` | Execute AI agent as child workflow | Returns structured result |
+| `hitl_approval` | Human-in-the-loop gate | Pauses workflow pending approval |
+| `kg_search` | Semantic search on knowledge graph | pgvector-based entity discovery |
+| `kg_query` | Graph traversal and relationships | Returns connected nodes/edges |
+| `notify` | Send Slack/email notifications | Asynchronous notification dispatch |
+
+### Four Trigger Mechanisms
+
+**1. Manual (REST POST)**
+```bash
+curl -X POST http://localhost:8094/api/v1/workflows/{id}/trigger \
+  -H "X-Tenant-ID: acme" \
+  -d '{"date": "2026-05-16", "exchange": "NSE"}'
+```
+
+**2. Webhook (HMAC-SHA256 Validated)**
+External systems send events to `/webhook/{workflow-id}`. Platform validates HMAC signature, prevents replay attacks via `Idempotency-Key`, and dispatches to the appropriate task queue.
+
+**3. Cron (Temporal Schedule)**
+Schedule workflows to run at regular intervals:
+```yaml
+trigger:
+  type: cron
+  cron: "0 17 * * 1-5"  # Daily at 5pm on weekdays
+```
+
+**4. Event-Driven (Fan-Out Pattern)**
+Multiple workflows triggered by a single event. Platform enforces isolation per workflow run.
+
+### Expression Evaluator
+
+Workflows support dynamic logic via `{{ }}` template syntax:
+
+**Variable substitution:**
+```yaml
+input_mapping:
+  prompt: "Analyze risk for {{ inputs.client_id }} with data: {{ steps.fetch.output }}"
+```
+
+**Conditional branching:**
+```yaml
+condition: "{{ steps.risk_score.output.risk_level == 'high' }}"
+```
+
+Operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `AND`, `OR`
+
+### Multi-Tenant Isolation & RLS
+
+Workflows are tenant-scoped via PostgreSQL RLS. Tenants cannot access or view workflows from other tenants. Cost tracking is per-tenant and per-workflow.
+
+### Workflow Service (Port 8094)
+
+New microservice providing:
+- **Workflow Registry CRUD** — register, list, update, delete workflows
+- **Trigger Dispatch** — accept manual/webhook/cron/event triggers and dispatch to Temporal
+- **Run Management** — track workflow execution state, step results, and costs
+- **Event Streaming** — proxy Temporal workflow events for UI visualization
 
 ---
 
