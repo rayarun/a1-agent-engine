@@ -95,12 +95,13 @@ function WorkflowCard({ workflow }: { workflow: Workflow }) {
 export default function WorkflowsPage() {
   const { tenantId } = useTenant();
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "paused" | "archived">("active");
+  const apiGateway = process.env.NEXT_PUBLIC_API_GATEWAY_URL ?? "http://localhost:8080";
 
   const { data: workflows, isLoading, error } = useQuery({
     queryKey: ["workflows", tenantId, filterStatus],
     queryFn: async () => {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/workflows?status=${filterStatus}`,
+        `${apiGateway}/api/v1/workflows?status=${filterStatus}`,
         {
           headers: {
             "X-Tenant-ID": tenantId,

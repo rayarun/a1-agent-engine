@@ -27,6 +27,7 @@ import {
   CheckCircle,
   Network,
   BookOpen,
+  GitBranch,
 } from "lucide-react";
 import {
   Sidebar,
@@ -48,6 +49,7 @@ const navItems = [
   { href: "/tools", label: "Tools", icon: Wrench },
   { href: "/skills", label: "Skills", icon: Zap },
   { href: "/agents", label: "Agents", icon: Bot },
+  { href: "/workflows", label: "Workflows", icon: GitBranch },
   { href: "/knowledge-graphs", label: "Knowledge Graphs", icon: Network },
   { href: "/chat", label: "Chat", icon: MessageSquare },
   { href: "/approvals", label: "Approvals", icon: CheckCircle },

@@ -57,6 +57,11 @@ func main() {
 		initiatorURL = "http://localhost:8081"
 	}
 
+	workflowServiceURL := os.Getenv("WORKFLOW_SERVICE_URL")
+	if workflowServiceURL == "" {
+		workflowServiceURL = "http://localhost:8094"
+	}
+
 	hmacSecret := []byte(os.Getenv("WEBHOOK_HMAC_SECRET"))
 	if len(hmacSecret) == 0 {
 		hmacSecret = []byte("dev-secret")
@@ -69,8 +74,9 @@ func main() {
 
 	store := service.NewInMemoryIdempotencyStore()
 	h := &service.GatewayHandler{
-		InitiatorURL:     initiatorURL,
-		IdempotencyStore: store,
+		InitiatorURL:        initiatorURL,
+		WorkflowServiceURL:  workflowServiceURL,
+		IdempotencyStore:    store,
 	}
 
 	mux := http.NewServeMux()
@@ -81,6 +87,16 @@ func main() {
 	mux.HandleFunc("GET /api/v1/agents/{id}/chat", h.HandleChatStream)
 	mux.HandleFunc("POST /api/v1/agents/{id}/chat", h.HandleChatStream)
 	mux.HandleFunc("GET /api/v1/agents/{id}/ws", h.HandleChatWS)
+	// Workflow Service proxy routes
+	mux.HandleFunc("GET /api/v1/workflows", h.ProxyWorkflowService)
+	mux.HandleFunc("POST /api/v1/workflows", h.ProxyWorkflowService)
+	mux.HandleFunc("GET /api/v1/workflows/{id}", h.ProxyWorkflowService)
+	mux.HandleFunc("PUT /api/v1/workflows/{id}", h.ProxyWorkflowService)
+	mux.HandleFunc("DELETE /api/v1/workflows/{id}", h.ProxyWorkflowService)
+	mux.HandleFunc("POST /api/v1/workflows/{id}/trigger", h.ProxyWorkflowService)
+	mux.HandleFunc("GET /api/v1/workflows/{id}/runs", h.ProxyWorkflowService)
+	mux.HandleFunc("GET /api/v1/workflow-runs/{id}", h.ProxyWorkflowService)
+	mux.HandleFunc("POST /api/v1/workflow-runs/{id}/cancel", h.ProxyWorkflowService)
 
 	log.Printf("Starting API Gateway on :8080 (Initiator: %s)", initiatorURL)
 	if err := http.ListenAndServe(":8080", withCORS(mux)); err != nil {
