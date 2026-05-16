@@ -27,6 +27,8 @@ servers:
     description: Local development MCP Registry (Tenant MCP Servers)
   - url: http://localhost:8091
     description: Local development MCP Server (Platform Capabilities)
+  - url: http://localhost:8094
+    description: Local development Workflow Service (Hybrid Workflows)
 
 tags:
   - name: Agent Execution
@@ -37,6 +39,8 @@ tags:
     description: Internal session status polling and event retrieval
   - name: HITL Approvals
     description: Human-in-the-loop approval management
+  - name: Hybrid Workflows
+    description: Workflow registry, triggering, and run management for YAML and Python SDK workflows
   - name: Administration
     description: Tenant management, configuration, and monitoring
   - name: MCP Client Management
@@ -1430,6 +1434,341 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/workflows:
+    get:
+      tags:
+        - Hybrid Workflows
+      summary: List workflows for tenant
+      description: Retrieve all workflow registrations for the authenticated tenant
+      operationId: listWorkflows
+      parameters:
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Tenant ID
+      responses:
+        '200':
+          description: List of workflow registrations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WorkflowRegistration'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags:
+        - Hybrid Workflows
+      summary: Register a new workflow
+      description: Create a new workflow (YAML-defined or code reference)
+      operationId: createWorkflow
+      parameters:
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Tenant ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - id
+                - workflow_type
+                - trigger_config
+              properties:
+                id:
+                  type: string
+                  description: Unique workflow ID
+                name:
+                  type: string
+                  description: Human-readable name
+                workflow_type:
+                  type: string
+                  enum: [yaml, code]
+                  description: "yaml for declarative or code for external workflow reference"
+                definition:
+                  type: object
+                  description: "For type=yaml: parsed YAML workflow definition"
+                  additionalProperties: true
+                workflow_class:
+                  type: string
+                  description: "For type=code: class name in external Temporal workflow"
+                task_queue:
+                  type: string
+                  description: Temporal task queue name
+                trigger_config:
+                  type: object
+                  description: Trigger configuration (type, cron, webhook_secret, etc.)
+                  additionalProperties: true
+      responses:
+        '201':
+          description: Workflow registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [draft, active, paused, archived]
+                  created_at:
+                    type: string
+                    format: date-time
+        '400':
+          description: Invalid workflow definition or YAML syntax error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/workflows/{workflow_id}:
+    get:
+      tags:
+        - Hybrid Workflows
+      summary: Get workflow registration
+      operationId: getWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Workflow registration
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '404':
+          description: Workflow not found
+
+  /api/v1/workflows/{workflow_id}/trigger:
+    post:
+      tags:
+        - Hybrid Workflows
+      summary: Trigger workflow execution (manual)
+      description: Manually trigger a workflow run with provided inputs
+      operationId: triggerWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: object
+                  description: Workflow input variables
+                  additionalProperties: true
+      responses:
+        '201':
+          description: Workflow run created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                  workflow_id:
+                    type: string
+                  status:
+                    type: string
+                  started_at:
+                    type: string
+                    format: date-time
+        '429':
+          description: Quota exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/workflows/{workflow_id}/runs:
+    get:
+      tags:
+        - Hybrid Workflows
+      summary: List workflow runs
+      operationId: listWorkflowRuns
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: List of workflow runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    run_id:
+                      type: string
+                    status:
+                      type: string
+                    started_at:
+                      type: string
+                      format: date-time
+
+  /api/v1/workflow-runs/{run_id}:
+    get:
+      tags:
+        - Hybrid Workflows
+      summary: Get workflow run details
+      operationId: getWorkflowRun
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Workflow run details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                  workflow_id:
+                    type: string
+                  status:
+                    type: string
+                  step_results:
+                    type: object
+                    description: Per-step execution results
+                  output:
+                    type: object
+                  cost_usd:
+                    type: number
+                  started_at:
+                    type: string
+                    format: date-time
+                  completed_at:
+                    type: string
+                    format: date-time
+
+  /webhook/{workflow_id}:
+    post:
+      tags:
+        - Hybrid Workflows
+      summary: Trigger workflow via webhook (HMAC-validated)
+      description: >
+        External systems trigger workflows via authenticated webhooks with
+        HMAC-SHA256 signature validation, replay protection (5 min window),
+        and idempotency key deduplication (24-hour window).
+      operationId: webhookTrigger
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          description: "HMAC-SHA256 signature: sha256=<hex>"
+        - name: X-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+          description: ISO 8601 timestamp (must be within 5 minutes)
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+          description: UUID for 24-hour deduplication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Webhook payload becomes workflow inputs
+              additionalProperties: true
+      responses:
+        '201':
+          description: Workflow triggered (or cached if duplicate idempotency key)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id:
+                    type: string
+                  status:
+                    type: string
+        '400':
+          description: Missing or invalid signature/timestamp
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Duplicate Idempotency-Key (returns cached response)
 
   /mcp/sse:
     get:
