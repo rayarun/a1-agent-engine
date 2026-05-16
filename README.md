@@ -69,13 +69,107 @@ A1 Agent Engine transforms how enterprises build and operate AI-driven automatio
 - **One-Click Import** — Admin Console wizard guides architects through cookbook selection, customization, and deployment
 
 **Hybrid Workflow Platform (NEW):**
-- **YAML-First Workflow Definition** — Declarative workflow authoring for non-developers with support for sequential, parallel, and conditional execution
-- **Platform SDK (a1-agent-sdk)** — Python SDK exposing 8 platform activities: invoke_skill, invoke_tool, invoke_mcp_tool, run_agent, hitl_approval, kg_search, kg_query, notify
-- **Four Trigger Mechanisms** — Manual (REST POST), Webhook (HMAC-SHA256 validated), Cron (Temporal Schedule), Event-Driven (fan-out pattern)
-- **Expression Evaluator** — {{ variable }} template syntax and {{ condition }} branching for dynamic workflow logic
-- **Multi-Tenant Workflows** — PostgreSQL RLS isolation ensures workflow data never leaks between tenants
-- **Cost Tracking** — Per-step and aggregate cost attribution for all workflow executions
-- **HITL Integration** — Human-in-the-loop approval gates pause workflow execution pending human decision with full context
+
+The A1 Agent Engine includes a **Hybrid Workflow Platform** that enables both declarative (YAML) and imperative (Python SDK) workflow authoring. Workflows combine pure Temporal task pipelines with agentic reasoning in a single unified execution model.
+
+**Three Developer Profiles:**
+
+_Profile 1: YAML Developer (Low-Code)_
+Define workflows declaratively without writing code. Platform runs YAML workflows on the `platform-hybrid-queue`.
+
+```yaml
+id: client-onboarding
+version: 1.0.0
+trigger:
+  type: webhook
+steps:
+  - id: fetch-kyc
+    type: task
+    skill_name: fetch-kyc-data
+  - id: risk-score
+    type: agent
+    agent_id: risk-assessment-agent
+    input_mapping:
+      prompt: "Assess risk for client KYC: {{ steps.fetch-kyc.output }}"
+  - id: compliance-gate
+    type: hitl
+    prompt: "AI flagged high-risk. Review and approve onboarding."
+    condition: "{{ steps.risk-score.output.risk_level == 'high' }}"
+    timeout_minutes: 60
+  - id: confirm
+    type: task
+    skill_name: send-confirmation-email
+```
+
+_Profile 2: Python SDK Developer (Temporal-Native)_
+Write standard Temporal `@workflow.defn` + `@activity.defn` code. Import platform activities via the `a1-agent-sdk` package.
+
+```python
+from temporalio import workflow, activity
+from a1_agent_sdk import invoke_skill, run_agent, hitl_approval
+import asyncio
+
+@activity.defn
+async def validate_settlement(trades: list[dict]) -> dict:
+    large_trades = [t for t in trades if t["amount"] > 100]
+    return {"valid": len(large_trades) == 0}
+
+@workflow.defn
+class SettlementPipeline:
+    @workflow.run
+    async def run(self, params: dict) -> dict:
+        validation = await workflow.execute_activity(
+            validate_settlement,
+            args=[params["trades"]],
+            start_to_close_timeout=timedelta(minutes=5),
+        )
+        analysis = await workflow.execute_activity(
+            run_agent,
+            args=["settlement-agent", f"Analyze: {params}", params["tenant_id"]],
+            start_to_close_timeout=timedelta(minutes=15),
+        )
+        if analysis.get("anomaly_detected") or not validation["valid"]:
+            approved = await workflow.execute_activity(
+                hitl_approval,
+                args=["Risk team approval", {"analysis": analysis}, params["tenant_id"]],
+                start_to_close_timeout=timedelta(hours=1),
+            )
+            if not approved:
+                return {"status": "escalated"}
+        return {"status": "completed"}
+```
+
+_Profile 3: Multi-Language Developers_
+Register your Go or Java Temporal workflows with the platform. Platform can trigger them via REST API while they benefit from platform primitives (cost tracking, audit logging, multi-tenancy).
+
+**Platform SDK (a1-agent-sdk):** Eight platform activities available for import:
+
+| Activity | Purpose | Notes |
+|----------|---------|-------|
+| `invoke_skill` | Execute platform skill | Routes through Skill Dispatcher |
+| `invoke_tool` | Execute registered tool | Direct tool invocation with validation |
+| `invoke_mcp_tool` | Call external MCP server tool | Deterministic, no LLM involved |
+| `run_agent` | Execute AI agent as child workflow | Returns structured result |
+| `hitl_approval` | Human-in-the-loop gate | Pauses workflow pending approval |
+| `kg_search` | Semantic search on knowledge graph | pgvector-based entity discovery |
+| `kg_query` | Graph traversal and relationships | Returns connected nodes/edges |
+| `notify` | Send Slack/email notifications | Asynchronous notification dispatch |
+
+**Trigger Mechanisms:**
+
+- **Manual (REST POST):** `curl -X POST http://localhost:8094/api/v1/workflows/{id}/trigger -H "X-Tenant-ID: acme" -d '{"date": "2026-05-16"}'`
+- **Webhook (HMAC-SHA256):** External systems send events to `/webhook/{workflow-id}` with signature validation and replay protection
+- **Cron (Temporal Schedule):** Schedule workflows at regular intervals (e.g., `cron: "0 17 * * 1-5"`)
+- **Event-Driven (Fan-Out):** Multiple workflows triggered by a single event with per-run isolation
+
+**Expression Evaluator:** Workflows support `{{ }}` template syntax for variables and conditionals:
+- Variable substitution: `"Analyze {{ inputs.client_id }} with {{ steps.fetch.output }}"`
+- Conditional branching: `"{{ steps.risk_score.output.level == 'high' }}"`
+- Operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `AND`, `OR`
+
+**Multi-Tenant & RLS:** Workflows are tenant-scoped via PostgreSQL RLS. Tenants cannot access workflows from other tenants. Cost tracking is per-tenant.
+
+**Workflow Service (Port 8094):** Microservice providing registry CRUD, trigger dispatch, run management, and event streaming for UI visualization.
 
 ## 🚀 Quick Start
 

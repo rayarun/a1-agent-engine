@@ -42,9 +42,11 @@ Thumbs.db
 *.log
 zscaler.pem
 
-# Blog posts (drafts, local work)
+# Blog posts (drafts, local work) — except published blog posts in docs/blogs
 BLOG_POST_*.md
 BLOG_POST_*.pdf
+!docs/blogs/BLOG_POST_*.md
+!docs/blogs/BLOG_POST_*.pdf
 blog-drafts/
 Untitled*.excalidraw
 
