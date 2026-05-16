@@ -395,3 +395,130 @@ def _skill_tool_def(skill_name: str) -> dict:
             },
         },
     }
+
+
+@workflow.defn
+class HybridWorkflow:
+    """Executes declarative YAML-defined workflows with task, agent, and HITL steps."""
+
+    def __init__(self):
+        self._events: list[dict] = []
+        self._hitl_decisions: dict[str, dict] = {}
+
+    @workflow.query
+    def get_events(self) -> list[dict]:
+        return self._events
+
+    @workflow.signal(name="hitl_decision")
+    async def hitl_decision(self, decision: dict) -> None:
+        step_id = decision.get("step_id")
+        if step_id:
+            self._hitl_decisions[step_id] = decision
+
+    def _emit(self, event: dict) -> None:
+        self._events.append(event)
+
+    @workflow.run
+    async def run(self, request: dict) -> str:
+        """Execute a hybrid workflow defined in YAML."""
+        definition = request.get("definition", {})
+        inputs = request.get("inputs", {})
+        tenant_id = request.get("tenant_id", "default-tenant")
+        workflow_id = request.get("workflow_id", "unknown")
+
+        workflow.logger.info(f"Starting HybridWorkflow {workflow_id}")
+        self._emit({"type": "workflow_start", "workflow_id": workflow_id})
+
+        context = {
+            "inputs": inputs,
+            "steps": {},
+            "tenant_id": tenant_id,
+        }
+
+        steps = definition.get("steps", [])
+
+        try:
+            for step in steps:
+                step_id = step.get("id")
+                step_type = step.get("type", "task")
+
+                workflow.logger.info(f"Executing step {step_id} of type {step_type}")
+                self._emit({"type": "step_start", "step_id": step_id, "step_type": step_type})
+
+                try:
+                    result = await self._execute_step(step, context)
+                    context["steps"][step_id] = {"status": "completed", "output": result}
+                    self._emit({"type": "step_complete", "step_id": step_id, "output": result})
+                except Exception as e:
+                    workflow.logger.error(f"Step {step_id} failed: {e}")
+                    context["steps"][step_id] = {"status": "failed", "error": str(e)}
+                    self._emit({"type": "step_failed", "step_id": step_id, "error": str(e)})
+
+                    # Check on_failure behavior
+                    on_failure = step.get("on_failure", "abort")
+                    if on_failure == "abort":
+                        raise Exception(f"Step {step_id} failed: {e}")
+                    elif on_failure == "continue":
+                        continue
+
+            self._emit({"type": "workflow_complete", "result": context["steps"]})
+            return json.dumps({"status": "completed", "steps": context["steps"]})
+
+        except Exception as e:
+            workflow.logger.error(f"Workflow failed: {e}")
+            self._emit({"type": "workflow_failed", "error": str(e)})
+            return json.dumps({"status": "failed", "error": str(e)})
+
+    async def _execute_step(self, step: dict, context: dict) -> dict:
+        """Execute a single workflow step."""
+        step_id = step.get("id")
+        step_type = step.get("type", "task")
+        tenant_id = context["tenant_id"]
+
+        if step_type == "task":
+            skill_name = step.get("skill_name")
+            args = step.get("args", {})
+            return await workflow.execute_activity(
+                "invoke_skill",
+                args=[skill_name, args, "", tenant_id],
+                start_to_close_timeout=timedelta(minutes=5),
+            )
+
+        elif step_type == "agent":
+            agent_id = step.get("agent_id")
+            prompt = step.get("input_mapping", {}).get("prompt", "")
+            return await workflow.execute_activity(
+                "invoke_agent",
+                args=[agent_id, prompt, tenant_id],
+                start_to_close_timeout=timedelta(minutes=15),
+            )
+
+        elif step_type == "hitl":
+            prompt = step.get("prompt", "Approve this action?")
+            if step_id:
+                self._hitl_decisions.pop(step_id, None)
+
+                # Wait for HITL decision (with timeout)
+                while step_id not in self._hitl_decisions:
+                    await asyncio.sleep(1)
+                    # TODO: implement proper timeout with workflow.wait_condition
+
+                decision = self._hitl_decisions[step_id]
+                return {
+                    "approved": decision.get("approved", False),
+                    "approved_by": decision.get("approved_by"),
+                    "notes": decision.get("notes"),
+                }
+            return {"approved": False, "error": "No step_id provided"}
+
+        elif step_type == "parallel":
+            parallel_steps = step.get("parallel_steps", [])
+            results = {}
+            for sub_step in parallel_steps:
+                sub_id = sub_step.get("id")
+                result = await self._execute_step(sub_step, context)
+                results[sub_id] = result
+            return results
+
+        else:
+            raise ValueError(f"Unknown step type: {step_type}")

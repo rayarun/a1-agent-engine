@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a1-agent-sdk"
+version = "1.0.0"
+description = "A1 Agent Engine: SDK for building hybrid Temporal workflows with AI agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Arun Ray", email = "arun.ray@angelone.in" },
+]
+
+dependencies = [
+    "temporalio>=1.6.0",
+    "httpx>=0.26.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx[http2]>=0.26.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/a1-agent-engine"
+Documentation = "https://docs.a1.engine"
+Repository = "https://github.com/your-org/a1-agent-engine.git"
+
+[tool.setuptools]
+packages = ["a1_agent_sdk", "a1_agent_sdk.activities"]
+
+[tool.setuptools.package-data]
+a1_agent_sdk = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["test"]
+python_files = "test_*.py"
+
+[tool.pyright]
+typeCheckingMode = "strict"

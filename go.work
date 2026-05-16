@@ -10,6 +10,7 @@ use (
 	./services/kg-service
 	./services/llm-gateway
 	./services/mcp-registry
+	./services/mcp-server
 	./services/sandbox-manager
 	./services/skill-catalog
 	./services/skill-dispatcher

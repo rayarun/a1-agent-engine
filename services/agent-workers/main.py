@@ -22,11 +22,12 @@ try:
     from temporalio.client import Client
     from temporalio.worker import Worker
 
-    # Workflow is deterministic
-    from workflows import AgentWorkflow
-    
+    # Workflows are deterministic
+    from workflows import AgentWorkflow, HybridWorkflow
+
     # Activities are non-deterministic (all moved to separate files)
     from activities_agent import execute_code, reasoning_step, invoke_skill, discover_mcp_tools, invoke_mcp_tool, resolve_mcp_servers, pydantic_ai_reasoning_step, fetch_system_tools, invoke_direct_tool
+    from activities_workflow import invoke_agent, evaluate_condition
     from activities_memory import recall_memories, store_memory
     from activities_cost import record_cost_event
 except Exception as e:
@@ -70,8 +71,23 @@ async def main():
         worker = Worker(
             client,
             task_queue=task_queue,
-            workflows=[AgentWorkflow],
-            activities=[execute_code, reasoning_step, pydantic_ai_reasoning_step, invoke_skill, discover_mcp_tools, invoke_mcp_tool, resolve_mcp_servers, fetch_system_tools, invoke_direct_tool, recall_memories, store_memory, record_cost_event],
+            workflows=[AgentWorkflow, HybridWorkflow],
+            activities=[
+                execute_code,
+                reasoning_step,
+                pydantic_ai_reasoning_step,
+                invoke_skill,
+                discover_mcp_tools,
+                invoke_mcp_tool,
+                resolve_mcp_servers,
+                fetch_system_tools,
+                invoke_direct_tool,
+                invoke_agent,
+                evaluate_condition,
+                recall_memories,
+                store_memory,
+                record_cost_event,
+            ],
         )
         
         logger.info(f"Starting Temporal Agent Worker on queue '{task_queue}'...")
