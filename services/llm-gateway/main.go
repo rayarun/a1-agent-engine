@@ -61,6 +61,51 @@ type configRequest struct {
 	GoogleAPIKey     string `json:"google_api_key"`
 }
 
+// Anthropic API types
+type anthropicRequest struct {
+	Model     string             `json:"model"`
+	Messages  []anthropicMessage `json:"messages"`
+	System    string             `json:"system,omitempty"`
+	MaxTokens int                `json:"max_tokens"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
+}
+
+type anthropicMessage struct {
+	Role    string             `json:"role"`
+	Content []anthropicContent `json:"content"`
+}
+
+type anthropicContent struct {
+	Type      string                `json:"type"`
+	Text      string                `json:"text,omitempty"`
+	ID        string                `json:"id,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Input     interface{}           `json:"input,omitempty"`
+	ToolUseID string                `json:"tool_use_id,omitempty"`
+	Content   []anthropicResultPart `json:"content,omitempty"`
+}
+
+type anthropicResultPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type anthropicTool struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	InputSchema interface{} `json:"input_schema"`
+}
+
+type anthropicResponse struct {
+	ID      string             `json:"id"`
+	Model   string             `json:"model"`
+	Content []anthropicContent `json:"content"`
+	Usage   struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+}
+
 var (
 	mu           sync.RWMutex
 	dbPool       *pgxpool.Pool
@@ -99,6 +144,10 @@ func init() {
 
 	// Load initial config from env or DB
 	loadConfig()
+
+	mu.RLock()
+	log.Printf("LLM Gateway: Config loaded - anthropicURL=%s, anthropicKey_set=%v", anthropicURL, anthropicKey != "")
+	mu.RUnlock()
 
 	if openaiClient == nil && anthropicKey == "" {
 		log.Println("LLM Gateway: Running in Mock only mode (no API keys)")
@@ -534,6 +583,159 @@ func trackLLMCost(ctx context.Context, req openai.ChatCompletionRequest, resp op
 	}()
 }
 
+func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRequest) {
+	log.Printf("Anthropic Inference (native format): Handling request for model %s", req.Model)
+
+	mu.RLock()
+	key := anthropicKey
+	url := anthropicURL
+	mu.RUnlock()
+
+	antReq := anthropicRequest{
+		Model:     req.Model,
+		MaxTokens: req.MaxTokens,
+	}
+	if antReq.MaxTokens == 0 {
+		antReq.MaxTokens = 1024
+	}
+
+	// Translate Tools
+	for _, t := range req.Tools {
+		if t.Type == openai.ToolTypeFunction {
+			antReq.Tools = append(antReq.Tools, anthropicTool{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				InputSchema: t.Function.Parameters,
+			})
+		}
+	}
+
+	// Translate Messages
+	for _, msg := range req.Messages {
+		if msg.Role == openai.ChatMessageRoleSystem {
+			antReq.System = msg.Content
+			continue
+		}
+
+		role := "user"
+		if msg.Role == openai.ChatMessageRoleAssistant {
+			role = "assistant"
+		}
+
+		var contents []anthropicContent
+		if msg.Content != "" {
+			contents = append(contents, anthropicContent{Type: "text", Text: msg.Content})
+		}
+
+		// Tool Calls (Assistant -> User)
+		for _, tc := range msg.ToolCalls {
+			var args map[string]interface{}
+			json.Unmarshal([]byte(tc.Function.Arguments), &args)
+			contents = append(contents, anthropicContent{
+				Type:  "tool_use",
+				ID:    tc.ID,
+				Name:  tc.Function.Name,
+				Input: args,
+			})
+		}
+
+		// Tool Results (Tool -> Assistant)
+		if msg.Role == openai.ChatMessageRoleTool {
+			role = "user"
+			contents = append(contents, anthropicContent{
+				Type:      "tool_result",
+				ToolUseID: msg.ToolCallID,
+				Content:   []anthropicResultPart{{Type: "text", Text: msg.Content}},
+			})
+		}
+
+		antReq.Messages = append(antReq.Messages, anthropicMessage{
+			Role:    role,
+			Content: contents,
+		})
+	}
+
+	// Execute HTTP Request
+	body, _ := json.Marshal(antReq)
+	httpReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
+	httpReq.Header.Set("Content-Type", "application/json")
+	keyToUse := fmt.Sprintf("Bearer %s", key)
+	keyPreview := key[:10] + "..." + key[len(key)-10:]
+	log.Printf("=== Anthropic Request ===")
+	log.Printf("URL: %s", url)
+	log.Printf("Model: %s", antReq.Model)
+	log.Printf("Auth Key: %s", keyPreview)
+	httpReq.Header.Set("Authorization", keyToUse)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		log.Printf("=== Anthropic Request FAILED ===")
+		log.Printf("HTTP Error: %v", err)
+		handleMockInference(w, req)
+		return
+	}
+	defer resp.Body.Close()
+
+	log.Printf("=== Anthropic Response ===")
+	log.Printf("Status Code: %d", resp.StatusCode)
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		log.Printf("Error Body: %s", string(respBody))
+		handleMockInference(w, req)
+		return
+	}
+
+	var antResp anthropicResponse
+	json.NewDecoder(resp.Body).Decode(&antResp)
+
+	// Translate Back to OpenAI
+	openaiResp := openai.ChatCompletionResponse{
+		ID:    antResp.ID,
+		Model: antResp.Model,
+		Choices: []openai.ChatCompletionChoice{
+			{
+				Index: 0,
+				Message: openai.ChatCompletionMessage{
+					Role: openai.ChatMessageRoleAssistant,
+				},
+			},
+		},
+		Usage: openai.Usage{
+			PromptTokens:     antResp.Usage.InputTokens,
+			CompletionTokens: antResp.Usage.OutputTokens,
+			TotalTokens:      antResp.Usage.InputTokens + antResp.Usage.OutputTokens,
+		},
+	}
+
+	for _, c := range antResp.Content {
+		if c.Type == "text" {
+			openaiResp.Choices[0].Message.Content = c.Text
+		}
+		if c.Type == "tool_use" {
+			args, _ := json.Marshal(c.Input)
+			openaiResp.Choices[0].Message.ToolCalls = append(openaiResp.Choices[0].Message.ToolCalls, openai.ToolCall{
+				ID:   c.ID,
+				Type: openai.ToolTypeFunction,
+				Function: openai.FunctionCall{
+					Name:      c.Name,
+					Arguments: string(args),
+				},
+			})
+			openaiResp.Choices[0].FinishReason = openai.FinishReasonToolCalls
+		}
+	}
+
+	if openaiResp.Choices[0].FinishReason == "" {
+		openaiResp.Choices[0].FinishReason = openai.FinishReasonStop
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(openaiResp)
+}
+
 func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	var req openai.ChatCompletionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -541,12 +743,28 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("=== handleChatCompletions START: model=%s ===", req.Model)
+	log.Printf("=== handleChatCompletions START: model=%s (NATIVE_ANTHRO_ADDED) ===", req.Model)
 
 	// Mock mode for testing
 	if strings.Contains(req.Model, "mock") {
 		log.Println("-> Routing to Mock (model contains 'mock')")
 		handleMockInference(w, req)
+		return
+	}
+
+	// If in anthropic mode with custom proxy URL, use native Anthropic handler
+	mu.RLock()
+	anthropicURL_ := anthropicURL
+	anthropicKey_ := anthropicKey
+	mu.RUnlock()
+
+	log.Printf("DEBUG: anthropicURL_=%s, anthropicKey_set=%v, isClaudeModel=%v, isCustomURL=%v",
+		anthropicURL_, anthropicKey_ != "", strings.Contains(req.Model, "claude"),
+		anthropicURL_ != "https://api.anthropic.com/v1/messages")
+
+	if anthropicKey_ != "" && anthropicURL_ != "https://api.anthropic.com/v1/messages" && anthropicURL_ != "" && strings.Contains(req.Model, "claude") {
+		log.Println("-> Routing to Anthropic (native format)")
+		handleAnthropicInference(w, req)
 		return
 	}
 
