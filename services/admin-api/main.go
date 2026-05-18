@@ -99,6 +99,13 @@ func main() {
 	mux.Handle("GET /api/v1/admin/system-agents/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetSystemAgent)))
 	mux.Handle("PUT /api/v1/admin/system-agents/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleUpdateSystemAgent)))
 
+	// Model Routes
+	mux.Handle("GET /api/v1/admin/model-routes", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleListModelRoutes)))
+	mux.Handle("POST /api/v1/admin/model-routes", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleCreateModelRoute)))
+	mux.Handle("PUT /api/v1/admin/model-routes/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleUpdateModelRoute)))
+	mux.Handle("DELETE /api/v1/admin/model-routes/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleDeleteModelRoute)))
+	mux.Handle("GET /api/v1/admin/litellm/config", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetLiteLLMConfig)))
+
 	// Execution Visualizer
 	mux.Handle("GET /api/v1/admin/executions", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleListExecutions)))
 	mux.Handle("GET /api/v1/admin/executions/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetExecution)))

@@ -414,6 +414,7 @@ type LLMConfigRequest struct {
 	AnthropicAPIKey  string `json:"anthropic_api_key,omitempty"`
 	AnthropicBaseURL string `json:"anthropic_base_url,omitempty"`
 	OpenAIAPIKey     string `json:"openai_api_key,omitempty"`
+	GoogleAPIKey     string `json:"google_api_key,omitempty"`
 }
 
 // SystemAgent represents a platform-system agent (Manifest Assistant, etc).
@@ -429,4 +430,39 @@ type SystemAgent struct {
 	Status        ResourceStatus `json:"status"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
+}
+
+// --- Model Routing ---
+
+// ModelRoute defines how a model pattern routes to an LLM endpoint.
+type ModelRoute struct {
+	ID           string    `json:"id"`
+	TenantID     string    `json:"tenant_id"`
+	ModelPattern string    `json:"model_pattern"` // e.g., "claude-*", "gpt-*", "gemma:*"
+	EndpointURL  string    `json:"endpoint_url"`
+	APIKey       string    `json:"api_key,omitempty"` // optional
+	ProviderType string    `json:"provider_type"`     // anthropic, openai, google, ollama, custom
+	Status       string    `json:"status"`            // active, inactive
+	Description  string    `json:"description,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// CreateModelRouteRequest is the payload for creating a new model route.
+type CreateModelRouteRequest struct {
+	ModelPattern string `json:"model_pattern"`
+	EndpointURL  string `json:"endpoint_url"`
+	APIKey       string `json:"api_key,omitempty"`
+	ProviderType string `json:"provider_type"`
+	Description  string `json:"description,omitempty"`
+}
+
+// UpdateModelRouteRequest is the payload for updating a model route.
+type UpdateModelRouteRequest struct {
+	ModelPattern *string `json:"model_pattern,omitempty"`
+	EndpointURL  *string `json:"endpoint_url,omitempty"`
+	APIKey       *string `json:"api_key,omitempty"`
+	ProviderType *string `json:"provider_type,omitempty"`
+	Status       *string `json:"status,omitempty"`
+	Description  *string `json:"description,omitempty"`
 }

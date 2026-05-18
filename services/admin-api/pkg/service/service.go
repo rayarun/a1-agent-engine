@@ -457,6 +457,13 @@ func (h *AdminHandler) HandlePutLLMConfig(w http.ResponseWriter, r *http.Request
 			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
 		`, "openai_api_key", req.OpenAIAPIKey)
 	}
+	if req.GoogleAPIKey != "" {
+		_, _ = h.DB.Exec(r.Context(), `
+			INSERT INTO platform_config (key, value, updated_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+		`, "google_api_key", req.GoogleAPIKey)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(llmResp.StatusCode)
@@ -2242,6 +2249,281 @@ func (h *AdminHandler) createAgentFromYAML(ctx context.Context, yamlPath string,
 	}
 
 	return agentID, nil
+}
+
+// --- Model Routes ---
+
+// HandleListModelRoutes lists all model routes for a tenant.
+func (h *AdminHandler) HandleListModelRoutes(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.Header.Get("X-Tenant-ID")
+	if tenantID == "" {
+		tenantID = "default-tenant"
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT id, tenant_id, model_pattern, endpoint_url, api_key, provider_type, status, description, created_at, updated_at
+		FROM model_routes
+		WHERE tenant_id = $1
+		ORDER BY model_pattern ASC
+	`, tenantID)
+	if err != nil {
+		http.Error(w, "Failed to fetch model routes", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var routes []models.ModelRoute
+	for rows.Next() {
+		var route models.ModelRoute
+		if err := rows.Scan(&route.ID, &route.TenantID, &route.ModelPattern, &route.EndpointURL,
+			&route.APIKey, &route.ProviderType, &route.Status, &route.Description,
+			&route.CreatedAt, &route.UpdatedAt); err != nil {
+			http.Error(w, "Failed to parse model routes", http.StatusInternalServerError)
+			return
+		}
+		route.APIKey = "" // Never return the key
+		routes = append(routes, route)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"routes": routes})
+}
+
+// HandleCreateModelRoute creates a new model route.
+func (h *AdminHandler) HandleCreateModelRoute(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.Header.Get("X-Tenant-ID")
+	if tenantID == "" {
+		tenantID = "default-tenant"
+	}
+
+	var req models.CreateModelRouteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ModelPattern == "" || req.EndpointURL == "" || req.ProviderType == "" {
+		http.Error(w, "Missing required fields", http.StatusBadRequest)
+		return
+	}
+
+	id := uuid.New().String()
+	now := time.Now()
+
+	_, err := h.DB.Exec(r.Context(), `
+		INSERT INTO model_routes (id, tenant_id, model_pattern, endpoint_url, api_key, provider_type, status, description, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9)
+	`, id, tenantID, req.ModelPattern, req.EndpointURL, req.APIKey, req.ProviderType, req.Description, now, now)
+
+	if err != nil {
+		http.Error(w, "Failed to create model route", http.StatusInternalServerError)
+		return
+	}
+
+	route := models.ModelRoute{
+		ID:           id,
+		TenantID:     tenantID,
+		ModelPattern: req.ModelPattern,
+		EndpointURL:  req.EndpointURL,
+		ProviderType: req.ProviderType,
+		Status:       "active",
+		Description:  req.Description,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(route)
+}
+
+// HandleUpdateModelRoute updates a model route.
+func (h *AdminHandler) HandleUpdateModelRoute(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.Header.Get("X-Tenant-ID")
+	if tenantID == "" {
+		tenantID = "default-tenant"
+	}
+
+	routeID := r.PathValue("id")
+	if routeID == "" {
+		http.Error(w, "Missing route ID", http.StatusBadRequest)
+		return
+	}
+
+	var req models.UpdateModelRouteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	updates := []string{}
+	args := []interface{}{routeID, tenantID}
+	argIndex := 3
+
+	if req.ModelPattern != nil {
+		updates = append(updates, fmt.Sprintf("model_pattern = $%d", argIndex))
+		args = append(args, *req.ModelPattern)
+		argIndex++
+	}
+	if req.EndpointURL != nil {
+		updates = append(updates, fmt.Sprintf("endpoint_url = $%d", argIndex))
+		args = append(args, *req.EndpointURL)
+		argIndex++
+	}
+	if req.APIKey != nil {
+		updates = append(updates, fmt.Sprintf("api_key = $%d", argIndex))
+		args = append(args, *req.APIKey)
+		argIndex++
+	}
+	if req.ProviderType != nil {
+		updates = append(updates, fmt.Sprintf("provider_type = $%d", argIndex))
+		args = append(args, *req.ProviderType)
+		argIndex++
+	}
+	if req.Status != nil {
+		updates = append(updates, fmt.Sprintf("status = $%d", argIndex))
+		args = append(args, *req.Status)
+		argIndex++
+	}
+	if req.Description != nil {
+		updates = append(updates, fmt.Sprintf("description = $%d", argIndex))
+		args = append(args, *req.Description)
+		argIndex++
+	}
+
+	updates = append(updates, fmt.Sprintf("updated_at = $%d", argIndex))
+	args = append(args, time.Now())
+
+	query := fmt.Sprintf(`
+		UPDATE model_routes
+		SET %s
+		WHERE id = $1 AND tenant_id = $2
+		RETURNING id, tenant_id, model_pattern, endpoint_url, api_key, provider_type, status, description, created_at, updated_at
+	`, strings.Join(updates, ", "))
+
+	row := h.DB.QueryRow(r.Context(), query, args...)
+	var route models.ModelRoute
+	if err := row.Scan(&route.ID, &route.TenantID, &route.ModelPattern, &route.EndpointURL,
+		&route.APIKey, &route.ProviderType, &route.Status, &route.Description,
+		&route.CreatedAt, &route.UpdatedAt); err != nil {
+		http.Error(w, "Failed to update model route", http.StatusInternalServerError)
+		return
+	}
+
+	route.APIKey = "" // Never return the key
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(route)
+}
+
+// HandleDeleteModelRoute deletes a model route.
+func (h *AdminHandler) HandleDeleteModelRoute(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.Header.Get("X-Tenant-ID")
+	if tenantID == "" {
+		tenantID = "default-tenant"
+	}
+
+	routeID := r.PathValue("id")
+	if routeID == "" {
+		http.Error(w, "Missing route ID", http.StatusBadRequest)
+		return
+	}
+
+	_, err := h.DB.Exec(r.Context(), `
+		DELETE FROM model_routes
+		WHERE id = $1 AND tenant_id = $2
+	`, routeID, tenantID)
+
+	if err != nil {
+		http.Error(w, "Failed to delete model route", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `{"status":"deleted"}`)
+}
+
+// GenerateLiteLLMConfig generates a liteLLM config from model routes.
+func (h *AdminHandler) GenerateLiteLLMConfig(ctx context.Context) (string, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT model_pattern, endpoint_url, api_key, provider_type, status
+		FROM model_routes
+		WHERE status = 'active'
+		ORDER BY model_pattern ASC
+	`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	type ModelListEntry struct {
+		ModelName      string      `yaml:"model_name"`
+		LiteLLMParams  interface{} `yaml:"litellm_params"`
+	}
+
+	var modelList []interface{}
+
+	for rows.Next() {
+		var pattern, endpoint, apiKey, provider, status string
+		if err := rows.Scan(&pattern, &endpoint, &apiKey, &provider, &status); err != nil {
+			return "", err
+		}
+
+		// Build liteLLM params based on provider type
+		params := map[string]interface{}{
+			"api_base": endpoint,
+		}
+
+		if apiKey != "" {
+			params["api_key"] = apiKey
+		}
+
+		// Map provider type to liteLLM model prefix
+		switch provider {
+		case "anthropic":
+			params["model"] = "claude-3-sonnet"
+		case "openai":
+			params["model"] = "gpt-4"
+		case "google":
+			params["model"] = "gemini-pro"
+		case "ollama":
+			params["model"] = "ollama/" + pattern
+		default:
+			params["model"] = pattern
+		}
+
+		entry := map[string]interface{}{
+			"model_name":      pattern,
+			"litellm_params":  params,
+		}
+
+		modelList = append(modelList, entry)
+	}
+
+	// Build full config
+	config := map[string]interface{}{
+		"model_list": modelList,
+	}
+
+	// Convert to YAML
+	yamlBytes, err := yaml.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+
+	return string(yamlBytes), nil
+}
+
+// HandleGetLiteLLMConfig returns the generated liteLLM config.
+func (h *AdminHandler) HandleGetLiteLLMConfig(w http.ResponseWriter, r *http.Request) {
+	config, err := h.GenerateLiteLLMConfig(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to generate liteLLM config", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/yaml")
+	fmt.Fprint(w, config)
 }
 
 // httpPost is a helper to POST with X-Tenant-ID header

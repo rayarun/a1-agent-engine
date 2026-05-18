@@ -50,6 +50,7 @@ type configResponse struct {
 	AnthropicBaseURL string `json:"anthropic_base_url"`
 	AnthropicKeySet  bool   `json:"anthropic_key_set"`
 	OpenAIKeySet     bool   `json:"openai_key_set"`
+	GoogleKeySet     bool   `json:"google_key_set"`
 	Mode             string `json:"mode"`
 }
 
@@ -57,6 +58,7 @@ type configRequest struct {
 	AnthropicAPIKey  string `json:"anthropic_api_key"`
 	AnthropicBaseURL string `json:"anthropic_base_url"`
 	OpenAIAPIKey     string `json:"openai_api_key"`
+	GoogleAPIKey     string `json:"google_api_key"`
 }
 
 var (
@@ -66,6 +68,7 @@ var (
 	anthropicKey string
 	anthropicURL string
 	openaiKey    string
+	googleKey    string
 	liteLLMURL   string
 )
 
@@ -131,10 +134,21 @@ func fillMissingFromEnv() {
 		anthropicURL = "https://api.anthropic.com/v1/messages"
 		log.Println("LLM Gateway: Using default Anthropic URL")
 	}
+
+	// Update liteLLM URL to match anthropic URL (for corporate proxy support)
+	if anthropicURL != "https://api.anthropic.com/v1/messages" && anthropicURL != "" {
+		liteLLMURL = anthropicURL
+		log.Printf("LLM Gateway: Updated liteLLM proxy URL to corporate proxy: %s", liteLLMURL)
+	}
+
 	if envKey := os.Getenv("OPENAI_API_KEY"); envKey != "" {
 		openaiKey = envKey
 		openaiClient = openai.NewClient(openaiKey)
 		log.Println("LLM Gateway: OpenAI client initialized from env")
+	}
+	if envKey := os.Getenv("GOOGLE_API_KEY"); envKey != "" {
+		googleKey = envKey
+		log.Println("LLM Gateway: Google API Key loaded from env")
 	}
 }
 
@@ -142,6 +156,7 @@ func loadConfigFromEnv() {
 	anthropicKey = os.Getenv("ANTHROPIC_API_KEY")
 	anthropicURL = os.Getenv("ANTHROPIC_BASE_URL")
 	openaiKey = os.Getenv("OPENAI_API_KEY")
+	googleKey = os.Getenv("GOOGLE_API_KEY")
 
 	if anthropicKey != "" {
 		keyPreview := anthropicKey[:10] + "..." + anthropicKey[len(anthropicKey)-10:]
@@ -160,6 +175,10 @@ func loadConfigFromEnv() {
 	if openaiKey != "" {
 		openaiClient = openai.NewClient(openaiKey)
 		log.Println("LLM Gateway: OpenAI client initialized from env")
+	}
+
+	if googleKey != "" {
+		log.Println("LLM Gateway: Google API Key loaded from env")
 	}
 }
 
@@ -186,16 +205,26 @@ func loadConfigFromDB() error {
 			anthropicURL = value
 		case "openai_api_key":
 			openaiKey = value
+		case "google_api_key":
+			googleKey = value
 		}
 	}
 
 	if anthropicURL == "" {
 		anthropicURL = "https://api.anthropic.com/v1/messages"
+	} else {
+		// Update liteLLM URL to match corporate proxy URL from DB
+		liteLLMURL = anthropicURL
+		log.Printf("LLM Gateway: Using corporate proxy from DB: %s", liteLLMURL)
 	}
 
 	if openaiKey != "" {
 		openaiClient = openai.NewClient(openaiKey)
 		log.Println("LLM Gateway: OpenAI client initialized from DB")
+	}
+
+	if googleKey != "" {
+		log.Println("LLM Gateway: Google API Key loaded from DB")
 	}
 
 	log.Println("LLM Gateway: Config loaded from DB")
@@ -265,6 +294,7 @@ func handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		AnthropicBaseURL: anthropicURL,
 		AnthropicKeySet:  anthropicKey != "",
 		OpenAIKeySet:     openaiClient != nil,
+		GoogleKeySet:     googleKey != "",
 		Mode:             getMode(),
 	}
 
@@ -305,9 +335,18 @@ func handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if req.GoogleAPIKey != "" {
+		googleKey = req.GoogleAPIKey
+		log.Println("LLM Gateway: Updated GOOGLE_API_KEY")
+		if dbPool != nil {
+			go persistConfigToDB("google_api_key", googleKey)
+		}
+	}
+
 	baseURL := anthropicURL
 	keySet := anthropicKey != ""
 	openaiSet := openaiClient != nil
+	googleSet := googleKey != ""
 	mu.Unlock()
 
 	mode := getMode()
@@ -316,6 +355,7 @@ func handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		AnthropicBaseURL: baseURL,
 		AnthropicKeySet:  keySet,
 		OpenAIKeySet:     openaiSet,
+		GoogleKeySet:     googleSet,
 		Mode:             mode,
 	}
 
@@ -388,13 +428,27 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpReq, err := http.NewRequest("POST", liteLLMURL+"/v1/embeddings", bytes.NewBuffer(body))
+	// Construct endpoint URL - if already includes /messages or /embeddings, use as-is
+	proxyURL := liteLLMURL
+	if !strings.Contains(proxyURL, "/messages") && !strings.Contains(proxyURL, "/embeddings") {
+		proxyURL = proxyURL + "/v1/embeddings"
+	}
+
+	httpReq, err := http.NewRequest("POST", proxyURL, bytes.NewBuffer(body))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("HTTP request error: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Add authentication for corporate proxy
+	mu.RLock()
+	key := anthropicKey
+	mu.RUnlock()
+	if key != "" {
+		httpReq.Header.Set("x-api-key", key)
+	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	httpResp, err := client.Do(httpReq)
@@ -512,7 +566,14 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpReq, err := http.NewRequest("POST", liteLLMURL+"/v1/chat/completions", bytes.NewBuffer(body))
+	// Construct endpoint URL - if already includes /messages or /chat/completions, use as-is
+	proxyURL := liteLLMURL
+	if !strings.Contains(proxyURL, "/messages") && !strings.Contains(proxyURL, "/chat/completions") {
+		proxyURL = proxyURL + "/v1/chat/completions"
+	}
+	log.Printf("-> Final request URL: %s", proxyURL)
+
+	httpReq, err := http.NewRequest("POST", proxyURL, bytes.NewBuffer(body))
 	if err != nil {
 		log.Printf("liteLLM request creation error: %v (falling back to mock)", err)
 		handleMockInference(w, req)
@@ -520,6 +581,14 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Add authentication for corporate proxy
+	mu.RLock()
+	key := anthropicKey
+	mu.RUnlock()
+	if key != "" {
+		httpReq.Header.Set("x-api-key", key)
+	}
 
 	client := &http.Client{Timeout: 2 * time.Minute}
 	httpResp, err := client.Do(httpReq)

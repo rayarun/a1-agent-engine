@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies and handle certificates
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Bypass SSL verification for pip during installation
+RUN pip install --no-cache-dir --index-url https://pypi.org/simple/ \
+    -i https://pypi.org/simple/ \
+    --trusted-host pypi.org \
+    --trusted-host pypi.python.org \
+    --trusted-host files.pythonhosted.org \
+    litellm uvicorn fastapi 2>&1 | head -20 || \
+    pip install --no-cache-dir \
+    --index-url https://mirrors.aliyun.com/pypi/simple/ \
+    litellm uvicorn fastapi
+
+EXPOSE 8000
+
+ENTRYPOINT ["litellm", "proxy"]
+CMD ["--port", "8000"]

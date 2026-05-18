@@ -166,6 +166,7 @@ export const adminApi = {
     anthropic_api_key?: string;
     anthropic_base_url?: string;
     openai_api_key?: string;
+    google_api_key?: string;
   }): Promise<any> {
     const response = await request("PUT", "/api/v1/admin/llm/config", data);
     if (!response.ok) throw new Error("Failed to update LLM config");
@@ -495,5 +496,49 @@ export const adminApi = {
       const body = await response.text();
       throw new Error(`Save failed (${response.status}): ${body}`);
     }
+  },
+
+  // Model Routes Management
+  async listModelRoutes(): Promise<any> {
+    const response = await request("GET", "/api/v1/admin/model-routes");
+    if (!response.ok) throw new Error("Failed to fetch model routes");
+    return response.json();
+  },
+
+  async createModelRoute(data: {
+    model_pattern: string;
+    endpoint_url: string;
+    provider_type: string;
+    api_key?: string;
+    description?: string;
+  }): Promise<any> {
+    const response = await request("POST", "/api/v1/admin/model-routes", data);
+    if (!response.ok) throw new Error("Failed to create model route");
+    return response.json();
+  },
+
+  async updateModelRoute(id: string, data: Partial<{
+    model_pattern: string;
+    endpoint_url: string;
+    provider_type: string;
+    api_key: string;
+    status: string;
+    description: string;
+  }>): Promise<any> {
+    const response = await request("PUT", `/api/v1/admin/model-routes/${id}`, data);
+    if (!response.ok) throw new Error("Failed to update model route");
+    return response.json();
+  },
+
+  async deleteModelRoute(id: string): Promise<any> {
+    const response = await request("DELETE", `/api/v1/admin/model-routes/${id}`);
+    if (!response.ok) throw new Error("Failed to delete model route");
+    return response.json();
+  },
+
+  async getLiteLLMConfig(): Promise<string> {
+    const response = await request("GET", "/api/v1/admin/litellm/config");
+    if (!response.ok) throw new Error("Failed to fetch liteLLM config");
+    return response.text();
   },
 };
