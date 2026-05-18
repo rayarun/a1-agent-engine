@@ -522,6 +522,27 @@ services:
     networks:
       - agent-net
 
+  # ------------------------------------
+  # liteLLM Proxy (port 8000) - Unified LLM Interface
+  # ------------------------------------
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    container_name: litellm
+    ports:
+      - "8000:8000"
+    environment:
+      # API Keys
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      # Custom proxy support (for corporate gateway that may also use liteLLM)
+      - CUSTOM_PROXY_URL=${CUSTOM_PROXY_URL:-}
+      - CUSTOM_PROXY_KEY=${CUSTOM_PROXY_KEY:-}
+      # Server settings
+      - LITELLM_LOG=DEBUG
+    networks:
+      - agent-net
+
 networks:
   agent-net:
     driver: bridge

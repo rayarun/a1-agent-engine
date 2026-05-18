@@ -66,9 +66,19 @@ var (
 	anthropicKey string
 	anthropicURL string
 	openaiKey    string
+	liteLLMURL   string
 )
 
 func init() {
+	// Initialize liteLLM URL (configurable for corporate proxies)
+	if url := os.Getenv("LITELLM_PROXY_URL"); url != "" {
+		liteLLMURL = url
+		log.Printf("LLM Gateway: Using custom liteLLM proxy: %s", url)
+	} else {
+		liteLLMURL = "http://litellm:8000"
+		log.Println("LLM Gateway: Using default liteLLM sidecar URL")
+	}
+
 	// Initialize database
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -370,40 +380,104 @@ func handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if openaiClient != nil {
-		resp, err := openaiClient.CreateEmbeddings(r.Context(), req)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("OpenAI error: %v", err), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+	log.Printf("-> Routing embeddings to liteLLM: model=%s", req.Model)
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Request marshaling error: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	// Mock Embeddings Logic
-	log.Printf("Mock Embeddings: Handling request for model %s", req.Model)
-	
-	// Create a deterministic mock vector of 1536 dimensions
-	vector := make([]float32, 1536)
-	for i := range vector {
-		vector[i] = 0.1 * float32(i) / 1536.0 // Minimal deterministic noise
+	httpReq, err := http.NewRequest("POST", liteLLMURL+"/v1/embeddings", bytes.NewBuffer(body))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("HTTP request error: %v", err), http.StatusInternalServerError)
+		return
 	}
 
-	resp := openai.EmbeddingResponse{
-		Object: "list",
-		Data: []openai.Embedding{
-			{
-				Object:    "embedding",
-				Index:     0,
-				Embedding: vector,
-			},
-		},
-		Model: "mock-embedding-v1",
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	httpResp, err := client.Do(httpReq)
+	if err != nil {
+		log.Printf("liteLLM embeddings request failed: %v", err)
+		http.Error(w, fmt.Sprintf("liteLLM error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(httpResp.Body)
+		log.Printf("liteLLM embeddings error (%d): %s", httpResp.StatusCode, string(respBody))
+		http.Error(w, fmt.Sprintf("liteLLM API error (%d)", httpResp.StatusCode), httpResp.StatusCode)
+		return
+	}
+
+	var resp openai.EmbeddingResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		http.Error(w, fmt.Sprintf("Response decode error: %v", err), http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+type liteLLMRequest struct {
+	Model       string             `json:"model"`
+	Messages    []openai.ChatCompletionMessage `json:"messages"`
+	MaxTokens   int                `json:"max_tokens,omitempty"`
+	Temperature float32            `json:"temperature,omitempty"`
+	Tools       []openai.Tool      `json:"tools,omitempty"`
+}
+
+type liteLLMCostTrackingResponse struct {
+	ID      string                        `json:"id"`
+	Model   string                        `json:"model"`
+	Choices []openai.ChatCompletionChoice `json:"choices"`
+	Usage   openai.Usage                  `json:"usage"`
+}
+
+func trackLLMCost(ctx context.Context, req openai.ChatCompletionRequest, resp openai.ChatCompletionResponse) {
+	if dbPool == nil {
+		return
+	}
+
+	// Extract provider and determine cost (basic: 0.01 per 1k input, 0.03 per 1k output)
+	provider := "unknown"
+	costPerInputMill := 10    // cents per 1M input tokens
+	costPerOutputMill := 30   // cents per 1M output tokens
+
+	if strings.Contains(req.Model, "claude") {
+		provider = "anthropic"
+		costPerInputMill = 3     // ~$3 per 1M input
+		costPerOutputMill = 15   // ~$15 per 1M output
+	} else if strings.Contains(req.Model, "gpt") {
+		provider = "openai"
+		costPerInputMill = 5
+		costPerOutputMill = 15
+	} else if strings.Contains(req.Model, "gemini") {
+		provider = "google"
+		costPerInputMill = 0     // Google pricing varies
+		costPerOutputMill = 0
+	}
+
+	costUSDCents := (resp.Usage.PromptTokens * costPerInputMill / 1000000) +
+		(resp.Usage.CompletionTokens * costPerOutputMill / 1000000)
+
+	go func() {
+		execCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_, err := dbPool.Exec(execCtx, `
+			INSERT INTO llm_cost_events
+			(tenant_id, provider, model, input_tokens, output_tokens, cost_usd_cents, status)
+			VALUES ($1, $2, $3, $4, $5, $6, 'success')
+		`, "default-tenant", provider, req.Model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, costUSDCents)
+
+		if err != nil {
+			log.Printf("Failed to track LLM cost: %v", err)
+		}
+	}()
 }
 
 func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -415,69 +489,63 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("=== handleChatCompletions START: model=%s ===", req.Model)
 
-	// Routing Logic
+	// Mock mode for testing
 	if strings.Contains(req.Model, "mock") {
 		log.Println("-> Routing to Mock (model contains 'mock')")
 		handleMockInference(w, req)
 		return
 	}
 
-	mu.RLock()
-	hasAnthropicKey := anthropicKey != ""
-	keyPreview := ""
-	if anthropicKey != "" {
-		keyPreview = anthropicKey[:10] + "..." + anthropicKey[len(anthropicKey)-10:]
+	// Call liteLLM proxy with graceful fallback
+	log.Printf("-> Routing to liteLLM: model=%s, url=%s", req.Model, liteLLMURL)
+	liteLLMReq := liteLLMRequest{
+		Model:       req.Model,
+		Messages:    req.Messages,
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
+		Tools:       req.Tools,
 	}
-	mu.RUnlock()
 
-	log.Printf("-> Model contains 'claude': %v, hasAnthropicKey: %v (key: %s)",
-		strings.Contains(req.Model, "claude"), hasAnthropicKey, keyPreview)
-
-	if strings.Contains(req.Model, "claude") && hasAnthropicKey {
-		log.Println("-> Routing to Anthropic")
-		handleAnthropicInference(w, req)
+	body, err := json.Marshal(liteLLMReq)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Request marshaling error: %v", err), http.StatusBadRequest)
 		return
 	}
 
-	mu.RLock()
-	customURL := anthropicURL
-	customKey := anthropicKey
-	isCustomProxy := anthropicURL != "" && anthropicURL != "https://api.anthropic.com/v1/messages"
-	mu.RUnlock()
-
-	// Check if we're in custom proxy mode and this isn't a Claude model
-	if isCustomProxy && !strings.Contains(req.Model, "claude") && customKey != "" {
-		log.Printf("-> Routing to Custom Proxy: %s (model: %s)", customURL, req.Model)
-		config := openai.DefaultConfig(customKey)
-		config.BaseURL = strings.TrimSuffix(customURL, "/v1/messages")
-		if !strings.HasSuffix(config.BaseURL, "/v1") {
-			config.BaseURL = config.BaseURL + "/v1"
-		}
-		customClient := openai.NewClientWithConfig(config)
-		resp, err := customClient.CreateChatCompletion(r.Context(), req)
-		if err != nil {
-			log.Printf("Custom proxy error: %v", err)
-			http.Error(w, fmt.Sprintf("Custom proxy error: %v", err), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	if openaiClient == nil {
-		log.Println("-> Routing to Mock (no openaiClient and not claude)")
+	httpReq, err := http.NewRequest("POST", liteLLMURL+"/v1/chat/completions", bytes.NewBuffer(body))
+	if err != nil {
+		log.Printf("liteLLM request creation error: %v (falling back to mock)", err)
 		handleMockInference(w, req)
 		return
 	}
 
-	log.Println("-> Routing to OpenAI")
-	// Proxy to OpenAI
-	resp, err := openaiClient.CreateChatCompletion(r.Context(), req)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 2 * time.Minute}
+	httpResp, err := client.Do(httpReq)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("OpenAI error: %v", err), http.StatusInternalServerError)
+		log.Printf("liteLLM request failed: %v (falling back to mock)", err)
+		handleMockInference(w, req)
 		return
 	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(httpResp.Body)
+		log.Printf("liteLLM error (%d): %s (falling back to mock)", httpResp.StatusCode, string(respBody))
+		handleMockInference(w, req)
+		return
+	}
+
+	var resp openai.ChatCompletionResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
+		log.Printf("liteLLM response decode error: %v (falling back to mock)", err)
+		handleMockInference(w, req)
+		return
+	}
+
+	// Track cost asynchronously
+	trackLLMCost(r.Context(), req, resp)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -525,301 +593,6 @@ func handleMockInference(w http.ResponseWriter, req openai.ChatCompletionRequest
 	json.NewEncoder(w).Encode(resp)
 }
 
-// --- Anthropic Raw HTTP Implementation ---
-
-type anthropicRequest struct {
-	Model     string             `json:"model"`
-	Messages  []anthropicMessage `json:"messages"`
-	System    string             `json:"system,omitempty"`
-	MaxTokens int                `json:"max_tokens"`
-	Tools     []anthropicTool    `json:"tools,omitempty"`
-}
-
-type anthropicMessage struct {
-	Role    string             `json:"role"`
-	Content []anthropicContent `json:"content"`
-}
-
-type anthropicContent struct {
-	Type      string                `json:"type"`
-	Text      string                `json:"text,omitempty"`
-	ID        string                `json:"id,omitempty"`
-	Name      string                `json:"name,omitempty"`
-	Input     interface{}           `json:"input,omitempty"`
-	ToolUseID string                `json:"tool_use_id,omitempty"`
-	Content   []anthropicResultPart `json:"content,omitempty"`
-}
-
-type anthropicResultPart struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type anthropicTool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description,omitempty"`
-	InputSchema interface{} `json:"input_schema"`
-}
-
-type anthropicResponse struct {
-	ID      string             `json:"id"`
-	Model   string             `json:"model"`
-	Content []anthropicContent `json:"content"`
-	Usage   struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
-}
-
-func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRequest) {
-	log.Printf("Anthropic Inference (Raw HTTP): Handling request for model %s", req.Model)
-
-	mu.RLock()
-	key := anthropicKey
-	url := anthropicURL
-	mu.RUnlock()
-
-	// Use model name as-is (internal proxy handles model routing)
-	modelName := req.Model
-	log.Printf("Using model: %s", modelName)
-
-	antReq := anthropicRequest{
-		Model:     modelName,
-		MaxTokens: req.MaxTokens,
-	}
-	if antReq.MaxTokens <= 0 {
-		antReq.MaxTokens = 4096
-	}
-
-	// Translate Tools - ensure proper schema format for litellm
-	for _, t := range req.Tools {
-		if t.Type == openai.ToolTypeFunction {
-			// Validate and clean up input schema
-			schema := t.Function.Parameters
-			if schema != nil {
-				// Ensure schema is a map for proper JSON encoding
-				if schemaMap, ok := schema.(map[string]interface{}); ok {
-					// Remove any null defaults that might cause litellm issues
-					if properties, hasProps := schemaMap["properties"].(map[string]interface{}); hasProps {
-						for key, prop := range properties {
-							if propMap, isPropMap := prop.(map[string]interface{}); isPropMap {
-								// Remove default: null entries
-								if defaultVal, hasDefault := propMap["default"]; hasDefault && defaultVal == nil {
-									delete(propMap, "default")
-								}
-								properties[key] = propMap
-							}
-						}
-						schemaMap["properties"] = properties
-					}
-					schema = schemaMap
-				}
-			}
-
-			// Only add tool if it has a name
-			if t.Function.Name != "" {
-				tool := anthropicTool{
-					Name:        t.Function.Name,
-					Description: t.Function.Description,
-					InputSchema: schema,
-				}
-				// Ensure description is not empty
-				if tool.Description == "" {
-					tool.Description = fmt.Sprintf("Tool: %s", t.Function.Name)
-				}
-				antReq.Tools = append(antReq.Tools, tool)
-				log.Printf("Added tool: %s (has_schema: %v)", t.Function.Name, schema != nil)
-			}
-		}
-	}
-
-	// Translate Messages
-	for _, msg := range req.Messages {
-		if msg.Role == openai.ChatMessageRoleSystem {
-			antReq.System = msg.Content
-			continue
-		}
-
-		role := "user"
-		if msg.Role == openai.ChatMessageRoleAssistant {
-			role = "assistant"
-		}
-
-		var contents []anthropicContent
-
-		// Tool Results (Tool -> Assistant) - handle separately first
-		if msg.Role == "tool" {
-			role = "user"
-			contents = append(contents, anthropicContent{
-				Type:      "tool_result",
-				ToolUseID: msg.ToolCallID,
-				Content:   []anthropicResultPart{{Type: "text", Text: msg.Content}},
-			})
-		} else {
-			// For non-tool messages, add text content
-			if msg.Content != "" {
-				contents = append(contents, anthropicContent{Type: "text", Text: msg.Content})
-			}
-
-			// Tool Calls (Assistant -> User)
-			for _, tc := range msg.ToolCalls {
-				var args map[string]interface{}
-				json.Unmarshal([]byte(tc.Function.Arguments), &args)
-				contents = append(contents, anthropicContent{
-					Type:  "tool_use",
-					ID:    tc.ID,
-					Name:  tc.Function.Name,
-					Input: args,
-				})
-			}
-		}
-
-		antReq.Messages = append(antReq.Messages, anthropicMessage{
-			Role:    role,
-			Content: contents,
-		})
-	}
-
-	// Execute HTTP Request with better error handling
-	body, err := json.Marshal(antReq)
-	if err != nil {
-		log.Printf("Failed to marshal Anthropic request: %v", err)
-		http.Error(w, fmt.Sprintf("Request marshaling error: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
-	if err != nil {
-		log.Printf("Failed to create HTTP request: %v", err)
-		http.Error(w, fmt.Sprintf("HTTP request error: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	keyToUse := fmt.Sprintf("Bearer %s", key)
-	keyPreview := ""
-	if len(key) > 20 {
-		keyPreview = key[:10] + "..." + key[len(key)-10:]
-	}
-
-	log.Printf("=== Anthropic Request ===")
-	log.Printf("URL: %s", url)
-	log.Printf("Model: %s", antReq.Model)
-	log.Printf("MaxTokens: %d", antReq.MaxTokens)
-	log.Printf("Auth Key: %s", keyPreview)
-	log.Printf("Tool count: %d", len(antReq.Tools))
-	log.Printf("Request Body (first 500 chars): %.500s", string(body))
-	log.Printf("Messages count: %d", len(antReq.Messages))
-	for i, msg := range antReq.Messages {
-		log.Printf("  Message[%d]: role=%s, content_count=%d", i, msg.Role, len(msg.Content))
-		for j, content := range msg.Content {
-			log.Printf("    Content[%d]: type=%s", j, content.Type)
-		}
-	}
-
-	httpReq.Header.Set("Authorization", keyToUse)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
-
-	client := &http.Client{}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		log.Printf("=== Anthropic Request FAILED ===")
-		log.Printf("HTTP Error: %v", err)
-		http.Error(w, fmt.Sprintf("Anthropic HTTP error: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	log.Printf("=== Anthropic Response ===")
-	log.Printf("Status Code: %d", resp.StatusCode)
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		respStr := string(respBody)
-		log.Printf("Error Body: %s", respStr)
-
-		// Workaround: If we get a NoneType comparison error from litellm and have tools, retry without tools
-		if resp.StatusCode == 500 && strings.Contains(respStr, "NoneType") && (strings.Contains(respStr, ">") || strings.Contains(respStr, "not supported between")) && len(antReq.Tools) > 0 {
-			log.Printf("Litellm tool handling error detected. Retrying without tools...")
-			antReq.Tools = []anthropicTool{} // Clear tools and retry
-
-			// Retry the request without tools
-			body, _ = json.Marshal(antReq)
-			httpReq, _ = http.NewRequest("POST", url, bytes.NewBuffer(body))
-			httpReq.Header.Set("Content-Type", "application/json")
-			httpReq.Header.Set("Authorization", keyToUse)
-			httpReq.Header.Set("anthropic-version", "2023-06-01")
-
-			resp, err = client.Do(httpReq)
-			if err != nil {
-				log.Printf("Retry failed: %v", err)
-				http.Error(w, fmt.Sprintf("Anthropic retry error: %v", err), http.StatusInternalServerError)
-				return
-			}
-			defer resp.Body.Close()
-			respBody, _ = io.ReadAll(resp.Body)
-			respStr = string(respBody)
-			log.Printf("Retry Status Code: %d", resp.StatusCode)
-
-			if resp.StatusCode != http.StatusOK {
-				log.Printf("Retry Error Body: %s", respStr)
-				http.Error(w, fmt.Sprintf("Anthropic API error after retry (%d): %s", resp.StatusCode, respStr), resp.StatusCode)
-				return
-			}
-		} else {
-			http.Error(w, fmt.Sprintf("Anthropic API error (%d): %s", resp.StatusCode, respStr), resp.StatusCode)
-			return
-		}
-	}
-
-	var antResp anthropicResponse
-	json.NewDecoder(resp.Body).Decode(&antResp)
-
-	// Translate Back to OpenAI
-	openaiResp := openai.ChatCompletionResponse{
-		ID:     antResp.ID,
-		Object: "chat.completion",
-		Model:  antResp.Model,
-		Choices: []openai.ChatCompletionChoice{
-			{
-				Index: 0,
-				Message: openai.ChatCompletionMessage{
-					Role: openai.ChatMessageRoleAssistant,
-				},
-			},
-		},
-		Usage: openai.Usage{
-			PromptTokens:     antResp.Usage.InputTokens,
-			CompletionTokens: antResp.Usage.OutputTokens,
-			TotalTokens:      antResp.Usage.InputTokens + antResp.Usage.OutputTokens,
-		},
-	}
-
-	for _, c := range antResp.Content {
-		if c.Type == "text" {
-			openaiResp.Choices[0].Message.Content = c.Text
-		}
-		if c.Type == "tool_use" {
-			args, _ := json.Marshal(c.Input)
-			openaiResp.Choices[0].Message.ToolCalls = append(openaiResp.Choices[0].Message.ToolCalls, openai.ToolCall{
-				ID:   c.ID,
-				Type: openai.ToolTypeFunction,
-				Function: openai.FunctionCall{
-					Name:      c.Name,
-					Arguments: string(args),
-				},
-			})
-			openaiResp.Choices[0].FinishReason = openai.FinishReasonToolCalls
-		}
-	}
-
-	if openaiResp.Choices[0].FinishReason == "" {
-		openaiResp.Choices[0].FinishReason = openai.FinishReasonStop
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(openaiResp)
-}
 
 func handleModels(w http.ResponseWriter, r *http.Request) {
 	var models []modelInfo
