@@ -219,9 +219,9 @@ class AgentToolRegistry:
         # Capture registry reference for closures
         registry = self
 
-        # 1. Built-in execute_code tool - use decorator with RunContext
-        @agent.tool
-        async def execute_code(ctx: RunContext[Any], code: str) -> str:
+        # 1. Built-in execute_code tool - use tool_plain to avoid RunContext schema issues
+        @agent.tool_plain
+        async def execute_code_tool(code: str) -> str:
             """Execute Python code in a secure sandbox.
 
             Args:
@@ -230,7 +230,14 @@ class AgentToolRegistry:
             Returns:
                 Output from the code execution
             """
-            return await registry.execute_code(code)
+            logger.info(f"[execute_code_tool] Executing code (length={len(code)})")
+            try:
+                result = await registry.execute_code(code)
+                logger.info(f"[execute_code_tool] Execution successful, result length={len(result)}")
+                return result
+            except Exception as e:
+                logger.error(f"[execute_code_tool] Execution failed: {e}")
+                raise
 
         # 2. Skills from manifest
         for skill_def in self.context.skills:
