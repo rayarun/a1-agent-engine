@@ -332,24 +332,3 @@ tools:
       sandbox_required: false
       registered_by: platform-admin
 
-  # Diagnostic Tools
-  - id: system-tool-kg-search-entities
-    name: kg-search-entities
-    version: "1.0.0"
-    description: Search knowledge graph for entities (services, hosts, incidents, etc.)
-    input_schema:
-      type: object
-      properties:
-        query:
-          type: string
-          description: Search query (entity name or type)
-        limit:
-          type: integer
-          description: Maximum number of results
-          default: 10
-      required:
-        - query
-    _metadata:
-      auth_level: read
-      sandbox_required: false
-      registered_by: platform-admin
