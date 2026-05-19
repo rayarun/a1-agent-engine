@@ -72,6 +72,11 @@ func main() {
 		KGServiceURL:     kgServiceURL,
 	}
 
+	// Generate initial LiteLLM config from model routes
+	if err := handler.GenerateLiteLLMConfig(context.Background()); err != nil {
+		log.Printf("Warning: failed to generate initial LiteLLM config: %v", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handler.HandleHealth)
 	mux.Handle("POST /api/v1/admin/auth/verify", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleAuthVerify)))

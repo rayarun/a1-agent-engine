@@ -402,8 +402,10 @@ services:
       - AGENT_REGISTRY_URL=http://agent-registry:8088
       - KG_SERVICE_URL=http://kg-service:8093
       - LITELLM_BASE_URL=http://litellm:8000/v1
+      - LITELLM_CONFIG_PATH=/etc/litellm/config.yaml
     volumes:
       - ../../infra/platform/cookbooks:/app/infra/platform/cookbooks:rw
+      - ./litellm_config:/etc/litellm:rw
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -509,10 +511,11 @@ services:
   # liteLLM Proxy (port 8000) - Unified LLM Interface
   # ------------------------------------
   litellm:
-    image: ghcr.io/berriai/litellm:main
+    image: ghcr.io/berriai/litellm:latest
     container_name: litellm
     ports:
-      - "8000:8000"
+      - "8000:4000"
+    entrypoint: ["/bin/sh", "/litellm_start.sh"]
     environment:
       # API Keys
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -523,6 +526,9 @@ services:
       - CUSTOM_PROXY_KEY=${CUSTOM_PROXY_KEY:-}
       # Server settings
       - LITELLM_LOG=DEBUG
+    volumes:
+      - ./litellm_config:/etc/litellm:rw
+      - ./litellm_start.sh:/litellm_start.sh:ro
     networks:
       - agent-net
 

@@ -8,7 +8,6 @@ use (
 	./services/agent-registry
 	./services/api-gateway
 	./services/kg-service
-	./services/llm-gateway
 	./services/mcp-registry
 	./services/mcp-server
 	./services/sandbox-manager

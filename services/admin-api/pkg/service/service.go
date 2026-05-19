@@ -2251,6 +2251,12 @@ func (h *AdminHandler) HandleCreateModelRoute(w http.ResponseWriter, r *http.Req
 		UpdatedAt:    now,
 	}
 
+	// Regenerate LiteLLM config after route creation
+	if err := h.GenerateLiteLLMConfig(r.Context()); err != nil {
+		// Log warning but don't fail the request
+		fmt.Printf("Warning: failed to regenerate LiteLLM config: %v\n", err)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(route)
@@ -2330,6 +2336,13 @@ func (h *AdminHandler) HandleUpdateModelRoute(w http.ResponseWriter, r *http.Req
 	}
 
 	route.APIKey = "" // Never return the key
+
+	// Regenerate LiteLLM config after route update
+	if err := h.GenerateLiteLLMConfig(r.Context()); err != nil {
+		// Log warning but don't fail the request
+		fmt.Printf("Warning: failed to regenerate LiteLLM config: %v\n", err)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(route)
 }
@@ -2357,13 +2370,19 @@ func (h *AdminHandler) HandleDeleteModelRoute(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Regenerate LiteLLM config after route deletion
+	if err := h.GenerateLiteLLMConfig(r.Context()); err != nil {
+		// Log warning but don't fail the request
+		fmt.Printf("Warning: failed to regenerate LiteLLM config: %v\n", err)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `{"status":"deleted"}`)
 }
 
-// GenerateLiteLLMConfig generates a liteLLM config from model routes.
-func (h *AdminHandler) GenerateLiteLLMConfig(ctx context.Context) (string, error) {
+// GenerateLiteLLMConfig generates a liteLLM config from model routes and writes to file.
+func (h *AdminHandler) GenerateLiteLLMConfig(ctx context.Context) error {
 	rows, err := h.DB.Query(ctx, `
 		SELECT model_pattern, endpoint_url, api_key, provider_type, status
 		FROM model_routes
@@ -2371,7 +2390,7 @@ func (h *AdminHandler) GenerateLiteLLMConfig(ctx context.Context) (string, error
 		ORDER BY model_pattern ASC
 	`)
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer rows.Close()
 
@@ -2385,7 +2404,7 @@ func (h *AdminHandler) GenerateLiteLLMConfig(ctx context.Context) (string, error
 	for rows.Next() {
 		var pattern, endpoint, apiKey, provider, status string
 		if err := rows.Scan(&pattern, &endpoint, &apiKey, &provider, &status); err != nil {
-			return "", err
+			return err
 		}
 
 		// Build liteLLM params based on provider type
@@ -2397,14 +2416,14 @@ func (h *AdminHandler) GenerateLiteLLMConfig(ctx context.Context) (string, error
 			params["api_key"] = apiKey
 		}
 
-		// Map provider type to liteLLM model prefix
+		// Map provider type to liteLLM model format: provider/model-name
 		switch provider {
 		case "anthropic":
-			params["model"] = "claude-3-sonnet"
+			params["model"] = "anthropic/" + pattern
 		case "openai":
-			params["model"] = "gpt-4"
+			params["model"] = "openai/" + pattern
 		case "google":
-			params["model"] = "gemini-pro"
+			params["model"] = "google/" + pattern
 		case "ollama":
 			params["model"] = "ollama/" + pattern
 		default:
@@ -2427,22 +2446,93 @@ func (h *AdminHandler) GenerateLiteLLMConfig(ctx context.Context) (string, error
 	// Convert to YAML
 	yamlBytes, err := yaml.Marshal(config)
 	if err != nil {
-		return "", err
+		return err
 	}
 
-	return string(yamlBytes), nil
+	// Write to config file
+	configPath := os.Getenv("LITELLM_CONFIG_PATH")
+	if configPath == "" {
+		configPath = "/etc/litellm/config.yaml"
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, yamlBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write LiteLLM config: %w", err)
+	}
+
+	fmt.Printf("LiteLLM config generated at %s with %v models\n", configPath, len(modelList))
+	return nil
 }
 
 // HandleGetLiteLLMConfig returns the generated liteLLM config.
 func (h *AdminHandler) HandleGetLiteLLMConfig(w http.ResponseWriter, r *http.Request) {
-	config, err := h.GenerateLiteLLMConfig(r.Context())
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT model_pattern, endpoint_url, api_key, provider_type, status
+		FROM model_routes
+		WHERE status = 'active'
+		ORDER BY model_pattern ASC
+	`)
 	if err != nil {
-		http.Error(w, "Failed to generate liteLLM config", http.StatusInternalServerError)
+		http.Error(w, "Failed to query model routes", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var modelList []interface{}
+
+	for rows.Next() {
+		var pattern, endpoint, apiKey, provider, status string
+		if err := rows.Scan(&pattern, &endpoint, &apiKey, &provider, &status); err != nil {
+			http.Error(w, "Failed to scan model routes", http.StatusInternalServerError)
+			return
+		}
+
+		params := map[string]interface{}{
+			"api_base": endpoint,
+		}
+
+		if apiKey != "" {
+			params["api_key"] = apiKey
+		}
+
+		switch provider {
+		case "anthropic":
+			params["model"] = "anthropic/" + pattern
+		case "openai":
+			params["model"] = "openai/" + pattern
+		case "google":
+			params["model"] = "google/" + pattern
+		case "ollama":
+			params["model"] = "ollama/" + pattern
+		default:
+			params["model"] = pattern
+		}
+
+		entry := map[string]interface{}{
+			"model_name":      pattern,
+			"litellm_params":  params,
+		}
+
+		modelList = append(modelList, entry)
+	}
+
+	config := map[string]interface{}{
+		"model_list": modelList,
+	}
+
+	yamlBytes, err := yaml.Marshal(config)
+	if err != nil {
+		http.Error(w, "Failed to marshal config", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/yaml")
-	fmt.Fprint(w, config)
+	fmt.Fprint(w, string(yamlBytes))
 }
 
 // httpPost is a helper to POST with X-Tenant-ID header
