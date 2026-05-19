@@ -693,8 +693,9 @@ func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRe
 
 	// Translate Back to OpenAI
 	openaiResp := openai.ChatCompletionResponse{
-		ID:    antResp.ID,
-		Model: antResp.Model,
+		ID:     antResp.ID,
+		Object: "chat.completion",
+		Model:  antResp.Model,
 		Choices: []openai.ChatCompletionChoice{
 			{
 				Index: 0,
