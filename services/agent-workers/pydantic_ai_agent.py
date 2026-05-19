@@ -560,7 +560,12 @@ async def convert_response_to_decision(response: Any, mcp_tools: list[MCPToolDef
 
 
 def _message_to_dict(message: Any) -> dict:
-    """Convert PydanticAI ModelRequest/ModelResponse to OpenAI format."""
+    """Convert PydanticAI ModelRequest/ModelResponse to OpenAI format.
+
+    Handles tool-call and tool-return parts to comply with OpenAI API:
+    - tool-call parts in response messages become tool_calls array
+    - tool-return parts in separate messages become role="tool" messages
+    """
     kind = getattr(message, "kind", None)
     if kind not in ("request", "response"):
         return message.__dict__ if hasattr(message, "__dict__") else {}
@@ -570,6 +575,19 @@ def _message_to_dict(message: Any) -> dict:
     # Map PydanticAI roles to OpenAI format
     role_map = {"request": "user", "response": "assistant"}
     role = role_map.get(kind, kind)
+
+    # Check if this is a tool-return message (should become role="tool")
+    if kind == "response" and len(parts) == 1:
+        part = parts[0]
+        if getattr(part, "part_kind", None) == "tool-return":
+            # Extract tool call ID and result content
+            tool_call_id = getattr(part, "tool_call_id", "")
+            result_content = getattr(part, "content", "")
+            return {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": result_content if isinstance(result_content, str) else str(result_content),
+            }
 
     result = {"role": role}
     content_parts = []
@@ -587,11 +605,6 @@ def _message_to_dict(message: Any) -> dict:
                 "name": getattr(part, "tool_name", ""),
                 "input": getattr(part, "args_as_dict", lambda: {})(),
             })
-        elif part_kind == "tool-result":
-            # For tool-result parts in a response, append as content block
-            result_content = getattr(part, "content", "")
-            if isinstance(result_content, str):
-                content_parts.append(result_content)
 
     # Set content to text or None
     if content_parts:
