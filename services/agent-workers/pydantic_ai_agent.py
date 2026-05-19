@@ -47,7 +47,7 @@ try:
         """Skip dict values in nested response details that cause TypeError."""
         if other is None:
             return
-        if not hasattr(other, 'details'):
+        if not hasattr(other, 'details') or other.details is None:
             return
         for key, value in other.details.items():
             # Only aggregate numeric types, skip dicts from nested response details
