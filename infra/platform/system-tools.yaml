@@ -331,3 +331,85 @@ tools:
       auth_level: read
       sandbox_required: false
       registered_by: platform-admin
+
+  # Diagnostic Tools
+  - id: system-tool-kg-search-entities
+    name: search-kg-entities
+    version: "1.0.0"
+    description: Search knowledge graph for entities (services, hosts, incidents, etc.)
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Search query (entity name or type)
+        entity_type:
+          type: string
+          description: Filter by entity type (service, host, incident, alert, etc.)
+          default: ""
+        limit:
+          type: integer
+          description: Maximum number of results
+          default: 10
+      required:
+        - query
+    _metadata:
+      auth_level: read
+      sandbox_required: false
+      registered_by: platform-admin
+
+  - id: system-tool-diagnostic-agent
+    name: diagnose-service
+    version: "1.0.0"
+    description: Run diagnostic checks on a service (health, metrics, logs)
+    input_schema:
+      type: object
+      properties:
+        service:
+          type: string
+          description: Service name or ID
+        check_type:
+          type: string
+          description: Type of diagnostic check (health, metrics, logs, config, dependencies)
+          enum: [health, metrics, logs, config, dependencies]
+          default: health
+        limit:
+          type: integer
+          description: Limit for results (e.g., last N logs)
+          default: 50
+      required:
+        - service
+    _metadata:
+      auth_level: read
+      sandbox_required: false
+      registered_by: platform-admin
+
+  - id: system-tool-log-analyzer
+    name: analyze-logs
+    version: "1.0.0"
+    description: Analyze logs from a service for errors, patterns, and anomalies
+    input_schema:
+      type: object
+      properties:
+        service:
+          type: string
+          description: Service name or ID
+        level:
+          type: string
+          description: Log level filter (error, warn, info, debug)
+          enum: [error, warn, info, debug, all]
+          default: error
+        limit:
+          type: integer
+          description: Maximum number of logs to analyze
+          default: 50
+        timerange:
+          type: string
+          description: Time range (e.g., '1h', '24h', '7d')
+          default: "1h"
+      required:
+        - service
+    _metadata:
+      auth_level: read
+      sandbox_required: false
+      registered_by: platform-admin
