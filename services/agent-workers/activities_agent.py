@@ -20,6 +20,16 @@ from temporalio import activity
 from openai import AsyncOpenAI
 import httpx
 
+# Clean response usage to remove nested detail dicts that PydanticAI can't handle
+def clean_completion_response(response):
+    """Strip out nested *_details dicts from response.usage that break PydanticAI aggregation."""
+    if hasattr(response, 'usage') and hasattr(response.usage, 'model_extra'):
+        if isinstance(response.usage.model_extra, dict):
+            # Remove keys ending with _details to prevent type mismatch in aggregation
+            response.usage.model_extra = {k: v for k, v in response.usage.model_extra.items()
+                                         if not k.endswith('_details')}
+    return response
+
 
 @activity.defn
 async def execute_code(code: str) -> str:

@@ -351,6 +351,23 @@ async def build_agent_with_tools(
     import os
     from pydantic_ai.models import infer_model
 
+    # Monkey-patch PydanticAI Usage.incr to skip dict values (from nested response details)
+    try:
+        from pydantic_ai.usage import Usage
+        original_incr = Usage.incr
+        def patched_incr(self, other):
+            if other is None:
+                return
+            for key, value in (other.details.items() if hasattr(other, 'details') else []):
+                # Skip nested detail dicts that break type checking
+                if isinstance(value, dict):
+                    continue
+                self.details[key] = self.details.get(key, 0) + value
+        Usage.incr = patched_incr
+        logger.info("[build_agent] Patched PydanticAI Usage.incr to handle nested detail dicts")
+    except Exception as e:
+        logger.warning(f"[build_agent] Failed to patch Usage.incr: {e}")
+
     # Configure PydanticAI to use LiteLLM proxy (OpenAI-compatible endpoint)
     # LiteLLM handles provider routing, format conversion, and credential management
     os.environ.setdefault("OPENAI_BASE_URL", os.getenv("LITELLM_BASE_URL", "http://localhost:8000/v1"))
