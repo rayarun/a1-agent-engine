@@ -2179,12 +2179,27 @@ func (h *AdminHandler) HandleListModelRoutes(w http.ResponseWriter, r *http.Requ
 		tenantID = "default-tenant"
 	}
 
-	rows, err := h.DB.Query(r.Context(), `
+	// Use transaction to ensure SET LOCAL affects the same connection
+	tx, err := h.DB.Begin(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Set RLS context for tenant isolation (manually escape to avoid parameter placeholder issues with SET)
+	escapedTenantID := strings.ReplaceAll(tenantID, "'", "''")
+	setLocalQuery := fmt.Sprintf("SET LOCAL app.tenant_id = '%s'", escapedTenantID)
+	if _, err := tx.Exec(r.Context(), setLocalQuery); err != nil {
+		http.Error(w, "Failed to set tenant context", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := tx.Query(r.Context(), `
 		SELECT id, tenant_id, model_pattern, endpoint_url, api_key, provider_type, status, description, created_at, updated_at
 		FROM model_routes
-		WHERE tenant_id = $1
 		ORDER BY model_pattern ASC
-	`, tenantID)
+	`)
 	if err != nil {
 		http.Error(w, "Failed to fetch model routes", http.StatusInternalServerError)
 		return
@@ -2194,14 +2209,26 @@ func (h *AdminHandler) HandleListModelRoutes(w http.ResponseWriter, r *http.Requ
 	var routes []models.ModelRoute
 	for rows.Next() {
 		var route models.ModelRoute
+		var apiKey, description *string
 		if err := rows.Scan(&route.ID, &route.TenantID, &route.ModelPattern, &route.EndpointURL,
-			&route.APIKey, &route.ProviderType, &route.Status, &route.Description,
+			&apiKey, &route.ProviderType, &route.Status, &description,
 			&route.CreatedAt, &route.UpdatedAt); err != nil {
 			http.Error(w, "Failed to parse model routes", http.StatusInternalServerError)
 			return
 		}
+		if apiKey != nil {
+			route.APIKey = *apiKey
+		}
+		if description != nil {
+			route.Description = *description
+		}
 		route.APIKey = "" // Never return the key
 		routes = append(routes, route)
+	}
+
+	if err := rows.Err(); err != nil {
+		http.Error(w, "Failed to fetch model routes", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2226,16 +2253,37 @@ func (h *AdminHandler) HandleCreateModelRoute(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Use transaction to ensure SET LOCAL affects the same connection
+	tx, err := h.DB.Begin(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Set RLS context for tenant isolation (manually escape to avoid parameter placeholder issues with SET)
+	escapedTenantID := strings.ReplaceAll(tenantID, "'", "''")
+	setLocalQuery := fmt.Sprintf("SET LOCAL app.tenant_id = '%s'", escapedTenantID)
+	if _, err := tx.Exec(r.Context(), setLocalQuery); err != nil {
+		http.Error(w, "Failed to set tenant context", http.StatusInternalServerError)
+		return
+	}
+
 	id := uuid.New().String()
 	now := time.Now()
 
-	_, err := h.DB.Exec(r.Context(), `
+	_, err = tx.Exec(r.Context(), `
 		INSERT INTO model_routes (id, tenant_id, model_pattern, endpoint_url, api_key, provider_type, status, description, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9)
 	`, id, tenantID, req.ModelPattern, req.EndpointURL, req.APIKey, req.ProviderType, req.Description, now, now)
 
 	if err != nil {
 		http.Error(w, "Failed to create model route", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 		return
 	}
 
@@ -2278,6 +2326,22 @@ func (h *AdminHandler) HandleUpdateModelRoute(w http.ResponseWriter, r *http.Req
 	var req models.UpdateModelRouteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Use transaction to ensure SET LOCAL affects the same connection
+	tx, err := h.DB.Begin(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Set RLS context for tenant isolation (manually escape to avoid parameter placeholder issues with SET)
+	escapedTenantID := strings.ReplaceAll(tenantID, "'", "''")
+	setLocalQuery := fmt.Sprintf("SET LOCAL app.tenant_id = '%s'", escapedTenantID)
+	if _, err := tx.Exec(r.Context(), setLocalQuery); err != nil {
+		http.Error(w, "Failed to set tenant context", http.StatusInternalServerError)
 		return
 	}
 
@@ -2326,12 +2390,17 @@ func (h *AdminHandler) HandleUpdateModelRoute(w http.ResponseWriter, r *http.Req
 		RETURNING id, tenant_id, model_pattern, endpoint_url, api_key, provider_type, status, description, created_at, updated_at
 	`, strings.Join(updates, ", "))
 
-	row := h.DB.QueryRow(r.Context(), query, args...)
+	row := tx.QueryRow(r.Context(), query, args...)
 	var route models.ModelRoute
 	if err := row.Scan(&route.ID, &route.TenantID, &route.ModelPattern, &route.EndpointURL,
 		&route.APIKey, &route.ProviderType, &route.Status, &route.Description,
 		&route.CreatedAt, &route.UpdatedAt); err != nil {
 		http.Error(w, "Failed to update model route", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 		return
 	}
 
@@ -2360,13 +2429,34 @@ func (h *AdminHandler) HandleDeleteModelRoute(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	_, err := h.DB.Exec(r.Context(), `
+	// Use transaction to ensure SET LOCAL affects the same connection
+	tx, err := h.DB.Begin(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Set RLS context for tenant isolation (manually escape to avoid parameter placeholder issues with SET)
+	escapedTenantID := strings.ReplaceAll(tenantID, "'", "''")
+	setLocalQuery := fmt.Sprintf("SET LOCAL app.tenant_id = '%s'", escapedTenantID)
+	if _, err := tx.Exec(r.Context(), setLocalQuery); err != nil {
+		http.Error(w, "Failed to set tenant context", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = tx.Exec(r.Context(), `
 		DELETE FROM model_routes
 		WHERE id = $1 AND tenant_id = $2
 	`, routeID, tenantID)
 
 	if err != nil {
 		http.Error(w, "Failed to delete model route", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
 		return
 	}
 
