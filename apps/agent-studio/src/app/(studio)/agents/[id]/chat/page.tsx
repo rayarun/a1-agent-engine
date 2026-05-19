@@ -163,51 +163,81 @@ function formatToolArgs(toolName: string, toolArgs: any): string {
   return JSON.stringify(toolArgs, null, 2);
 }
 
+function formatToolCommand(toolName: string, toolArgs: any): string {
+  if (!toolArgs) return toolName;
+
+  if (typeof toolArgs === "string") {
+    return `${toolName} ${toolArgs}`;
+  }
+
+  // For single-string arguments (common case)
+  if (Object.keys(toolArgs).length === 1) {
+    const value = Object.values(toolArgs)[0];
+    if (typeof value === "string") {
+      return `${toolName} ${value}`;
+    }
+  }
+
+  return toolName;
+}
+
 function ToolCallBlock({ event }: { event: ChatEvent }) {
   const [expanded, setExpanded] = useState(false);
   // Support both "tool_name" (new) and "name" (legacy) field names
   const toolName = event.tool_name || (event as any).name || "Unknown Tool";
   const toolArgs = event.tool_args || (event as any).args;
   const toolResult = event.tool_result || (event as any).result;
-  const hasContent = toolArgs !== undefined || toolResult !== undefined;
+  const isComplete = toolResult !== undefined;
+  const commandLine = formatToolCommand(toolName, toolArgs);
 
   return (
-    <div className="my-1 rounded border border-border/50 bg-muted/30 text-xs font-mono overflow-hidden">
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50 transition-colors"
-      >
-        <Wrench className="h-3 w-3 text-yellow-400 shrink-0" />
-        <span className="text-yellow-400 font-semibold">{toolName}</span>
-        {!hasContent && <span className="text-muted-foreground/50 ml-auto text-xs italic">pending...</span>}
-        <span className="text-muted-foreground ml-auto">
-          {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        </span>
-      </button>
-      {expanded && (
-        <div className="border-t border-border/50 px-3 py-2 space-y-2">
-          {toolArgs !== undefined ? (
-            <div>
-              <div className="text-muted-foreground mb-1">arguments</div>
-              <pre className="text-foreground/80 whitespace-pre-wrap">
-                {formatToolArgs(toolName, toolArgs)}
-              </pre>
-            </div>
-          ) : (
-            <div className="text-muted-foreground/60 italic">No arguments</div>
-          )}
-          {toolResult !== undefined ? (
-            <div>
-              <div className="text-green-400 mb-1">result</div>
-              <pre className="text-foreground/80 whitespace-pre-wrap">
-                {typeof toolResult === "string"
-                  ? toolResult
-                  : JSON.stringify(toolResult, null, 2)}
-              </pre>
-            </div>
-          ) : (
-            <div className="text-muted-foreground/60 italic">Awaiting result...</div>
-          )}
+    <div className="my-2 rounded border border-border/50 bg-muted/20 text-xs font-mono overflow-hidden">
+      {/* IN section */}
+      <div className="px-3 py-2 bg-muted/40 border-b border-border/50">
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground font-semibold w-8">IN</span>
+          <code className="text-foreground/80 flex-1 break-all">{commandLine}</code>
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="ml-2 text-muted-foreground hover:text-foreground transition-colors shrink-0"
+            title={isComplete ? "Show details" : "Pending..."}
+          >
+            {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          </button>
+        </div>
+      </div>
+
+      {/* OUT section - always visible if result exists */}
+      {isComplete ? (
+        <div className="px-3 py-2 bg-muted/10">
+          <div className="flex items-start gap-2">
+            <span className="text-green-400 font-semibold w-8 shrink-0">OUT</span>
+            <pre className="text-foreground/80 whitespace-pre-wrap flex-1 overflow-auto max-h-48">
+              {typeof toolResult === "string"
+                ? toolResult
+                : JSON.stringify(toolResult, null, 2)}
+            </pre>
+          </div>
+        </div>
+      ) : (
+        <div className="px-3 py-2 bg-muted/10">
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground font-semibold w-8">OUT</span>
+            <span className="text-muted-foreground/60 italic">Awaiting result...</span>
+            <Loader2 className="h-3 w-3 animate-spin ml-auto" />
+          </div>
+        </div>
+      )}
+
+      {/* Details section - shown when expanded */}
+      {expanded && toolArgs && (
+        <div className="border-t border-border/50 px-3 py-2 bg-muted/5 space-y-2">
+          <div>
+            <div className="text-muted-foreground/70 mb-1 text-xs uppercase tracking-wider">Arguments</div>
+            <pre className="text-foreground/70 whitespace-pre-wrap text-xs overflow-auto max-h-32">
+              {formatToolArgs(toolName, toolArgs)}
+            </pre>
+          </div>
         </div>
       )}
     </div>

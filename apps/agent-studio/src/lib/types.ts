@@ -136,6 +136,7 @@ export interface Message {
   content: string;
   events?: ChatEvent[];
   streaming?: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 export interface KGGraph {
