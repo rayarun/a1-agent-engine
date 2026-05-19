@@ -288,7 +288,18 @@ class AgentToolRegistry:
 
         # 3. Direct tools (system-injected + manifest-specified)
         all_direct_tools = list(self.context.system_tools) + list(self.context.tools)
+
+        # Deduplicate by converted safe name to avoid PydanticAI conflicts
+        seen_safe_names = set()
+        deduplicated_tools = []
         for tool_def in all_direct_tools:
+            tool_name = tool_def.get("name", "")
+            safe_name = tool_name.replace("-", "_").replace(".", "_")
+            if safe_name not in seen_safe_names:
+                seen_safe_names.add(safe_name)
+                deduplicated_tools.append(tool_def)
+
+        for tool_def in deduplicated_tools:
             tool_name = tool_def.get("name", "")
             tool_version = tool_def.get("version", "1.0.0")
             tool_description = tool_def.get("description", f"Execute {tool_name} tool")
@@ -343,7 +354,7 @@ class AgentToolRegistry:
                 tool_args = args or {}
                 return await registry.invoke_mcp_tool(_server_id, _tool_name, tool_args)
 
-        direct_tools_count = len(self.context.system_tools) + len(self.context.tools)
+        direct_tools_count = len(deduplicated_tools)
         logger.info(
             f"Registered {1 + len(self.context.skills) + direct_tools_count + len(self.mcp_tools)} tools for agent"
         )
