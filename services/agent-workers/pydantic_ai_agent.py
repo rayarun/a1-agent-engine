@@ -572,6 +572,11 @@ def _message_to_dict(message: Any) -> dict:
 
     parts = getattr(message, "parts", [])
 
+    logger.info(f"[_message_to_dict] kind={kind}, num_parts={len(parts)}")
+    for idx, part in enumerate(parts):
+        part_kind = getattr(part, "part_kind", None)
+        logger.info(f"[_message_to_dict]   Part {idx}: part_kind={part_kind}, type={type(part).__name__}")
+
     # Map PydanticAI roles to OpenAI format
     role_map = {"request": "user", "response": "assistant"}
     role = role_map.get(kind, kind)
@@ -583,6 +588,7 @@ def _message_to_dict(message: Any) -> dict:
             # Extract tool call ID and result content
             tool_call_id = getattr(part, "tool_call_id", "")
             result_content = getattr(part, "content", "")
+            logger.info(f"[_message_to_dict] Converting tool-return to role=tool: tool_call_id={tool_call_id}")
             return {
                 "role": "tool",
                 "tool_call_id": tool_call_id,
@@ -599,10 +605,13 @@ def _message_to_dict(message: Any) -> dict:
         if part_kind == "text":
             content_parts.append(getattr(part, "content", ""))
         elif part_kind == "tool-call":
+            tool_id = getattr(part, "tool_call_id", "")
+            tool_name = getattr(part, "tool_name", "")
+            logger.info(f"[_message_to_dict] Found tool-call: id={tool_id}, name={tool_name}")
             tool_calls.append({
-                "id": getattr(part, "tool_call_id", ""),
+                "id": tool_id,
                 "type": "tool_use",
-                "name": getattr(part, "tool_name", ""),
+                "name": tool_name,
                 "input": getattr(part, "args_as_dict", lambda: {})(),
             })
 
@@ -615,5 +624,7 @@ def _message_to_dict(message: Any) -> dict:
     # Add tool_calls if present
     if tool_calls:
         result["tool_calls"] = tool_calls
+        logger.info(f"[_message_to_dict] Result has {len(tool_calls)} tool_calls")
 
+    logger.info(f"[_message_to_dict] Final result: role={result.get('role')}, has_content={bool(result.get('content'))}, has_tool_calls={bool(result.get('tool_calls'))}")
     return result
