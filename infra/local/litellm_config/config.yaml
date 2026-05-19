@@ -4,3 +4,18 @@ model_list:
         api_key: sk--d-AWAtSYtikG7GvpvGNkw
         model: anthropic/*
       model_name: '*'
+    - litellm_params:
+        api_base: https://llm-inference.internal.angelone.in/v1/messages
+        api_key: sk--d-AWAtSYtikG7GvpvGNkw
+        model: anthropic/claude-3-haiku
+      model_name: claude-3-haiku
+    - litellm_params:
+        api_base: https://llm-inference.internal.angelone.in/v1/messages
+        api_key: sk--d-AWAtSYtikG7GvpvGNkw
+        model: anthropic/claude-3-opus
+      model_name: claude-3-opus
+    - litellm_params:
+        api_base: https://llm-inference.internal.angelone.in/v1/messages
+        api_key: sk--d-AWAtSYtikG7GvpvGNkw
+        model: anthropic/claude-3-sonnet
+      model_name: claude-3-sonnet
