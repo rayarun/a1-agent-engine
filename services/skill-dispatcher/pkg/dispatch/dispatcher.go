@@ -490,6 +490,8 @@ func (r *ToolExecutorRouter) executeKG(ctx context.Context, tool models.ToolRef,
 		endpoint = "/query"
 	case "kg-search":
 		endpoint = "/search/nodes"
+	case "kg-search-entities":
+		endpoint = "/search/nodes"
 	case "kg-semantic-search":
 		endpoint = "/search/semantic"
 	default:
