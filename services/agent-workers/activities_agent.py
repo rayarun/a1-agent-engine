@@ -308,6 +308,19 @@ async def pydantic_ai_reasoning_step(
         agent = await build_agent_with_tools(context, workflow_ref=None, mcp_tools=mcp_tools)
         logging.info(f"[STEP 5] Agent built successfully")
 
+        # Log tool definitions before sending to LLM
+        try:
+            import json
+            for tool in agent._tools:
+                tool_name = getattr(tool, 'name', 'unknown')
+                tool_schema = getattr(tool, 'schema', None)
+                logging.info(f"[TOOL_DEBUG] {tool_name}: schema_type={type(tool_schema).__name__}")
+                if tool_schema and hasattr(tool_schema, 'parameters'):
+                    params = tool_schema.parameters
+                    logging.info(f"[TOOL_DEBUG]   {tool_name} parameters: {json.dumps(params, default=str)[:500]}")
+        except Exception as e:
+            logging.info(f"[TOOL_DEBUG] Error logging tools: {e}")
+
         # Run agent for single reasoning step
         # Note: We only pass user_prompt and system_prompt, not message history,
         # because PydanticAI manages message history internally
