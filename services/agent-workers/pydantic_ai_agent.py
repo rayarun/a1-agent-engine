@@ -351,22 +351,36 @@ async def build_agent_with_tools(
     import os
     from pydantic_ai.models import infer_model
 
-    # Monkey-patch PydanticAI Usage.incr to skip dict values (from nested response details)
+    # Monkey-patch PydanticAI Usage to skip dict values in nested response details
+    import sys
+    if 'pydantic_ai.usage' not in sys.modules:
+        try:
+            from pydantic_ai import usage as usage_module
+            logger.info("[build_agent] Importing pydantic_ai.usage module")
+        except Exception as e:
+            logger.warning(f"[build_agent] Could not import usage module: {e}")
+
     try:
         from pydantic_ai.usage import Usage
-        original_incr = Usage.incr
-        def patched_incr(self, other):
+        logger.info(f"[build_agent] Got Usage class: {Usage}")
+
+        # Create patched incr method
+        def safe_incr(self, other):
+            """Patched incr() that safely handles nested dicts from response details."""
             if other is None:
                 return
-            for key, value in (other.details.items() if hasattr(other, 'details') else []):
-                # Skip nested detail dicts that break type checking
-                if isinstance(value, dict):
+            if not hasattr(other, 'details'):
+                return
+            for key, value in other.details.items():
+                # Skip dicts and other non-numeric types to prevent type errors
+                if not isinstance(value, (int, float)):
                     continue
                 self.details[key] = self.details.get(key, 0) + value
-        Usage.incr = patched_incr
-        logger.info("[build_agent] Patched PydanticAI Usage.incr to handle nested detail dicts")
+
+        Usage.incr = safe_incr
+        logger.info("[build_agent] ✓ Patched PydanticAI Usage.incr successfully")
     except Exception as e:
-        logger.warning(f"[build_agent] Failed to patch Usage.incr: {e}")
+        logger.error(f"[build_agent] ✗ Failed to patch Usage.incr: {e}", exc_info=True)
 
     # Configure PydanticAI to use LiteLLM proxy (OpenAI-compatible endpoint)
     # LiteLLM handles provider routing, format conversion, and credential management
