@@ -64,18 +64,12 @@ func main() {
 		kgServiceURL = "http://localhost:8093"
 	}
 
-	litellmURL := os.Getenv("LITELLM_BASE_URL")
-	if litellmURL == "" {
-		litellmURL = "http://localhost:8000/v1"
-	}
-
 	handler := &service.AdminHandler{
 		DB:               dbPool,
 		AdminKey:         adminAPIKey,
 		TemporalClient:   temporalClient,
 		AgentRegistryURL: agentRegistryURL,
 		KGServiceURL:     kgServiceURL,
-		LLMGatewayURL:    litellmURL,
 	}
 
 	mux := http.NewServeMux()
@@ -89,10 +83,6 @@ func main() {
 	mux.Handle("GET /api/v1/admin/tenants/{id}", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetTenant)))
 	mux.Handle("GET /api/v1/admin/tenants", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleListTenants)))
 	mux.Handle("POST /api/v1/admin/tenants", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleCreateTenant)))
-
-	// LLM Configuration
-	mux.Handle("GET /api/v1/admin/llm/config", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleGetLLMConfig)))
-	mux.Handle("PUT /api/v1/admin/llm/config", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandlePutLLMConfig)))
 
 	// System Agents
 	mux.Handle("GET /api/v1/admin/system-agents", authMiddleware(adminAPIKey, http.HandlerFunc(handler.HandleListSystemAgents)))

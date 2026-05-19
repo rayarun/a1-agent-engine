@@ -40,7 +40,6 @@ type AdminHandler struct {
 	TemporalClient   client.Client
 	AgentRegistryURL string
 	KGServiceURL     string
-	LLMGatewayURL    string
 }
 
 // getPricingModel retrieves the pricing model from platform_config.
@@ -388,86 +387,6 @@ func (h *AdminHandler) HandleDeleteTenant(w http.ResponseWriter, r *http.Request
 		"message":   "Tenant deleted successfully",
 		"tenant_id": tenantID,
 	})
-}
-
-// HandleGetLLMConfig proxies to LLM Gateway and returns current config.
-func (h *AdminHandler) HandleGetLLMConfig(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	resp, err := http.Get(h.LLMGatewayURL + "/admin/config")
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to reach LLM Gateway: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "LLM Gateway error", resp.StatusCode)
-		return
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	fmt.Fprintf(w, "%s", readBody(resp.Body))
-}
-
-// HandlePutLLMConfig proxies to LLM Gateway and persists config to DB.
-func (h *AdminHandler) HandlePutLLMConfig(w http.ResponseWriter, r *http.Request) {
-	var req models.LLMConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	// Build request body for LLM Gateway
-	reqBody, _ := json.Marshal(req)
-	llmReq, err := http.NewRequest("PUT", h.LLMGatewayURL+"/admin/config", strings.NewReader(string(reqBody)))
-	if err != nil {
-		http.Error(w, "Failed to create request", http.StatusInternalServerError)
-		return
-	}
-	llmReq.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	llmResp, err := client.Do(llmReq)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to reach LLM Gateway: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer llmResp.Body.Close()
-
-	// Also persist to platform_config table
-	if req.AnthropicAPIKey != "" {
-		_, _ = h.DB.Exec(r.Context(), `
-			INSERT INTO platform_config (key, value, updated_at)
-			VALUES ($1, $2, NOW())
-			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
-		`, "anthropic_api_key", req.AnthropicAPIKey)
-	}
-	if req.AnthropicBaseURL != "" {
-		_, _ = h.DB.Exec(r.Context(), `
-			INSERT INTO platform_config (key, value, updated_at)
-			VALUES ($1, $2, NOW())
-			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
-		`, "anthropic_base_url", req.AnthropicBaseURL)
-	}
-	if req.OpenAIAPIKey != "" {
-		_, _ = h.DB.Exec(r.Context(), `
-			INSERT INTO platform_config (key, value, updated_at)
-			VALUES ($1, $2, NOW())
-			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
-		`, "openai_api_key", req.OpenAIAPIKey)
-	}
-	if req.GoogleAPIKey != "" {
-		_, _ = h.DB.Exec(r.Context(), `
-			INSERT INTO platform_config (key, value, updated_at)
-			VALUES ($1, $2, NOW())
-			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
-		`, "google_api_key", req.GoogleAPIKey)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(llmResp.StatusCode)
-	fmt.Fprintf(w, "%s", readBody(llmResp.Body))
 }
 
 // HandleListSystemAgents lists all platform-system tenant agents.
