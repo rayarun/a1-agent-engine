@@ -14,33 +14,80 @@
 
 import { Message } from "./types";
 
-const STORAGE_PREFIX = "chat-session:";
-const cache = new Map<string, Message[]>();
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+const CLEANUP_INTERVAL_MS = 60 * 1000; // Check every 1 minute
+
+interface SessionData {
+  messages: Message[];
+  createdAt: number;
+  lastActivityAt: number;
+}
+
+const cache = new Map<string, SessionData>();
+
+// Start cleanup interval when module loads
+startCleanupInterval();
+
+function startCleanupInterval() {
+  setInterval(() => {
+    const now = Date.now();
+    const expiredSessions: string[] = [];
+
+    cache.forEach((session, agentId) => {
+      if (now - session.lastActivityAt > IDLE_TIMEOUT_MS) {
+        expiredSessions.push(agentId);
+      }
+    });
+
+    expiredSessions.forEach((agentId) => {
+      console.log(`[ChatCache] Cleared idle session for agent ${agentId}`);
+      cache.delete(agentId);
+    });
+  }, CLEANUP_INTERVAL_MS);
+}
 
 export function getSession(agentId: string): Message[] {
-  if (!cache.has(agentId)) {
-    try {
-      const raw = sessionStorage.getItem(STORAGE_PREFIX + agentId);
-      cache.set(agentId, raw ? JSON.parse(raw) : []);
-    } catch {
-      cache.set(agentId, []);
-    }
+  const session = cache.get(agentId);
+  if (!session) {
+    return [];
   }
-  return cache.get(agentId)!;
+
+  const now = Date.now();
+  const isExpired = now - session.lastActivityAt > IDLE_TIMEOUT_MS;
+
+  if (isExpired) {
+    console.log(`[ChatCache] Session expired for agent ${agentId} (idle for ${Math.round((now - session.lastActivityAt) / 1000)}s)`);
+    cache.delete(agentId);
+    return [];
+  }
+
+  // Update activity on read
+  session.lastActivityAt = now;
+  return session.messages;
 }
 
 export function setSession(agentId: string, messages: Message[]): void {
-  cache.set(agentId, messages);
-  try {
-    sessionStorage.setItem(STORAGE_PREFIX + agentId, JSON.stringify(messages));
-  } catch {
-    // sessionStorage full or unavailable — in-memory cache still works
+  const now = Date.now();
+  const session = cache.get(agentId);
+
+  if (session) {
+    session.messages = messages;
+    session.lastActivityAt = now;
+  } else {
+    cache.set(agentId, {
+      messages,
+      createdAt: now,
+      lastActivityAt: now,
+    });
   }
 }
 
 export function clearSession(agentId: string): void {
   cache.delete(agentId);
-  try {
-    sessionStorage.removeItem(STORAGE_PREFIX + agentId);
-  } catch {}
+}
+
+export function getSessionIdleTime(agentId: string): number {
+  const session = cache.get(agentId);
+  if (!session) return 0;
+  return Math.max(0, IDLE_TIMEOUT_MS - (Date.now() - session.lastActivityAt));
 }

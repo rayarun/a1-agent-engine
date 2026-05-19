@@ -29,10 +29,12 @@ import {
   AlertCircle,
   CheckCircle,
   XCircle,
+  Clock,
 } from "lucide-react";
 import { agentsApi } from "@/lib/api";
 import { ChatEvent, Message } from "@/lib/types";
-import { getSession, setSession, clearSession } from "@/lib/chat-session-cache";
+import { getSession, setSession, clearSession, getSessionIdleTime } from "@/lib/chat-session-cache";
+import { startTimingSession, recordTiming, endTimingSession } from "@/lib/chat-timing";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -139,6 +141,28 @@ function ApprovalBlock({ event, tenantId }: { event: ChatEvent; tenantId: string
   );
 }
 
+function formatToolArgs(toolName: string, toolArgs: any): string {
+  if (typeof toolArgs === "string") return toolArgs;
+
+  if (toolName === "execute_code") {
+    if (!toolArgs || Object.keys(toolArgs).length === 0) {
+      return "(Tool called with no arguments)";
+    }
+    if (toolArgs?.code) {
+      const code = typeof toolArgs.code === "string"
+        ? toolArgs.code
+        : JSON.stringify(toolArgs.code);
+      const displayArgs = {
+        ...toolArgs,
+        code: code.split("\\n").join("\n"),
+      };
+      return JSON.stringify(displayArgs, null, 2);
+    }
+  }
+
+  return JSON.stringify(toolArgs, null, 2);
+}
+
 function ToolCallBlock({ event }: { event: ChatEvent }) {
   const [expanded, setExpanded] = useState(false);
   // Support both "tool_name" (new) and "name" (legacy) field names
@@ -166,7 +190,7 @@ function ToolCallBlock({ event }: { event: ChatEvent }) {
             <div>
               <div className="text-muted-foreground mb-1">arguments</div>
               <pre className="text-foreground/80 whitespace-pre-wrap">
-                {typeof toolArgs === "string" ? toolArgs : JSON.stringify(toolArgs, null, 2)}
+                {formatToolArgs(toolName, toolArgs)}
               </pre>
             </div>
           ) : (
@@ -280,9 +304,11 @@ export default function ChatPage({
   const [messages, setMessages] = useState<Message[]>(() => getSession(id));
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [idleTimeMs, setIdleTimeMs] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const { data: agent } = useQuery({
     queryKey: ["agents", id],
@@ -305,14 +331,39 @@ export default function ChatPage({
     }
   }, [streaming, id]);
 
+  // Idle timeout monitoring
+  useEffect(() => {
+    // Check idle time immediately on mount
+    setIdleTimeMs(getSessionIdleTime(id));
+
+    // Update idle time every second
+    idleTimerRef.current = setInterval(() => {
+      const remaining = getSessionIdleTime(id);
+      setIdleTimeMs(remaining);
+
+      // If session expired, clear it
+      if (remaining === 0 && messages.length > 0) {
+        console.log("[ChatPage] Session expired due to idle timeout");
+        setMessages([]);
+      }
+    }, 1000);
+
+    return () => {
+      if (idleTimerRef.current) {
+        clearInterval(idleTimerRef.current);
+      }
+    };
+  }, [id, messages.length]);
+
   const tryWebSocket = useCallback(
-    (text: string, assistantId: string, onFallback: () => void) => {
+    (text: string, assistantId: string, onFallback: () => void, timingId?: string) => {
       const wsURL = API_GATEWAY.replace(/^http/, "ws") + `/api/v1/agents/${id}/ws`;
       const ws = new WebSocket(wsURL);
       wsRef.current = ws;
 
       const timeout = setTimeout(() => {
         if (ws.readyState === WebSocket.CONNECTING) {
+          if (timingId) recordTiming(timingId, "WebSocket timeout");
           console.log("WebSocket timeout, falling back to SSE");
           ws.close();
           onFallback();
@@ -321,13 +372,16 @@ export default function ChatPage({
 
       ws.onopen = () => {
         clearTimeout(timeout);
+        if (timingId) recordTiming(timingId, "WebSocket connected");
         console.log("WebSocket connected");
         ws.send(JSON.stringify({ message: text, tenant_id: tenantId }));
+        if (timingId) recordTiming(timingId, "Message sent to server");
       };
 
       ws.onmessage = (e) => {
         try {
           const event: ChatEvent = JSON.parse(e.data);
+          if (timingId && event.type !== "text") recordTiming(timingId, `Event received: ${event.type}`);
 
           // Debug: log approval events
           if (event.type === "approval") {
@@ -363,6 +417,10 @@ export default function ChatPage({
           );
 
           if (event.type === "done" || event.type === "error") {
+            if (timingId) {
+              recordTiming(timingId, `Response complete: ${event.type}`);
+              endTimingSession(timingId);
+            }
             ws.close();
             setStreaming(false);
           }
@@ -373,6 +431,7 @@ export default function ChatPage({
 
       ws.onerror = () => {
         clearTimeout(timeout);
+        if (timingId) recordTiming(timingId, "WebSocket error");
         console.log("WebSocket error, falling back to SSE");
         ws.close();
         onFallback();
@@ -382,7 +441,8 @@ export default function ChatPage({
   );
 
   const useSSEFallback = useCallback(
-    (text: string, assistantId: string) => {
+    (text: string, assistantId: string, timingId?: string) => {
+      if (timingId) recordTiming(timingId, "SSE fallback started");
       console.log("Using SSE fallback");
       const sseURL = `${API_GATEWAY}/api/v1/agents/${id}/chat`;
 
@@ -396,6 +456,7 @@ export default function ChatPage({
         body: JSON.stringify({ message: text, tenant_id: tenantId }),
       })
         .then((resp) => {
+          if (timingId) recordTiming(timingId, "SSE response received");
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const reader = resp.body?.getReader();
           if (!reader) throw new Error("No response body");
@@ -414,6 +475,8 @@ export default function ChatPage({
                   if (line.startsWith("data: ")) {
                     try {
                       const event: ChatEvent = JSON.parse(line.slice(6));
+                      if (timingId && event.type !== "text") recordTiming(timingId, `Event received: ${event.type}`);
+
                       setMessages((prev) =>
                         prev.map((m) => {
                           if (m.id !== assistantId) return m;
@@ -438,6 +501,10 @@ export default function ChatPage({
                       );
 
                       if (event.type === "done" || event.type === "error") {
+                        if (timingId) {
+                          recordTiming(timingId, `Response complete: ${event.type}`);
+                          endTimingSession(timingId);
+                        }
                         setStreaming(false);
                         return;
                       }
@@ -448,6 +515,7 @@ export default function ChatPage({
                 }
               }
             } catch (err) {
+              if (timingId) recordTiming(timingId, `SSE stream error: ${err}`);
               console.error("SSE stream error:", err);
               setMessages((prev) =>
                 prev.map((m) =>
@@ -467,6 +535,10 @@ export default function ChatPage({
           processStream();
         })
         .catch((err) => {
+          if (timingId) {
+            recordTiming(timingId, `SSE setup error: ${err}`);
+            endTimingSession(timingId);
+          }
           console.error("SSE setup error:", err);
           setMessages((prev) =>
             prev.map((m) =>
@@ -489,6 +561,10 @@ export default function ChatPage({
     const text = input.trim();
     if (!text || streaming) return;
 
+    const timingId = `msg-${crypto.randomUUID()}`;
+    startTimingSession(timingId);
+    recordTiming(timingId, "Message sent from UI");
+
     const userMsg: Message = {
       id: crypto.randomUUID(),
       role: "user",
@@ -501,6 +577,7 @@ export default function ChatPage({
       content: "",
       events: [],
       streaming: true,
+      metadata: { timingId },
     };
 
     setMessages((prev) => {
@@ -510,9 +587,13 @@ export default function ChatPage({
     });
     setInput("");
     setStreaming(true);
+    recordTiming(timingId, "UI state updated");
 
     // Try WebSocket first, fall back to SSE
-    tryWebSocket(text, assistantId, () => useSSEFallback(text, assistantId));
+    tryWebSocket(text, assistantId, () => {
+      recordTiming(timingId, "WebSocket failed, using SSE");
+      useSSEFallback(text, assistantId, timingId);
+    }, timingId);
   }, [id, input, streaming, tryWebSocket, useSSEFallback]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -546,6 +627,17 @@ export default function ChatPage({
           <span className="text-xs text-muted-foreground ml-1">
             {agent.model}
           </span>
+        )}
+        {idleTimeMs !== null && idleTimeMs > 0 && messages.length > 0 && (
+          <div className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded ${
+            idleTimeMs < 60000 ? 'text-orange-400 bg-orange-500/10' : 'text-muted-foreground'
+          }`}>
+            <Clock className="h-3 w-3" />
+            <span>
+              {Math.floor(idleTimeMs / 60000)}:
+              {String(Math.floor((idleTimeMs % 60000) / 1000)).padStart(2, '0')}
+            </span>
+          </div>
         )}
         <Button
           variant="ghost"

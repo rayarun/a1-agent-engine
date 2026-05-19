@@ -88,6 +88,7 @@ async def main():
                 store_memory,
                 record_cost_event,
             ],
+            max_concurrent_activities=16,
         )
         
         logger.info(f"Starting Temporal Agent Worker on queue '{task_queue}'...")

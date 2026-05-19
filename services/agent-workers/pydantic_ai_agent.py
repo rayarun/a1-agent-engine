@@ -560,16 +560,47 @@ async def convert_response_to_decision(response: Any, mcp_tools: list[MCPToolDef
 
 
 def _message_to_dict(message: Any) -> dict:
-    """Convert PydanticAI ModelRequest/ModelResponse to dict for storage in Temporal."""
+    """Convert PydanticAI ModelRequest/ModelResponse to OpenAI format."""
     kind = getattr(message, "kind", None)
-    if kind in ("request", "response"):
-        parts = getattr(message, "parts", [])
-        content_parts = []
-        for part in parts:
-            if getattr(part, "part_kind", None) == "text":
-                content_parts.append(getattr(part, "content", ""))
-        return {
-            "role": kind,
-            "content": " ".join(content_parts),
-        }
-    return message.__dict__ if hasattr(message, "__dict__") else {}
+    if kind not in ("request", "response"):
+        return message.__dict__ if hasattr(message, "__dict__") else {}
+
+    parts = getattr(message, "parts", [])
+
+    # Map PydanticAI roles to OpenAI format
+    role_map = {"request": "user", "response": "assistant"}
+    role = role_map.get(kind, kind)
+
+    result = {"role": role}
+    content_parts = []
+    tool_calls = []
+
+    for part in parts:
+        part_kind = getattr(part, "part_kind", None)
+
+        if part_kind == "text":
+            content_parts.append(getattr(part, "content", ""))
+        elif part_kind == "tool-call":
+            tool_calls.append({
+                "id": getattr(part, "tool_call_id", ""),
+                "type": "tool_use",
+                "name": getattr(part, "tool_name", ""),
+                "input": getattr(part, "args_as_dict", lambda: {})(),
+            })
+        elif part_kind == "tool-result":
+            # For tool-result parts in a response, append as content block
+            result_content = getattr(part, "content", "")
+            if isinstance(result_content, str):
+                content_parts.append(result_content)
+
+    # Set content to text or None
+    if content_parts:
+        result["content"] = " ".join(content_parts)
+    elif not tool_calls:
+        result["content"] = None
+
+    # Add tool_calls if present
+    if tool_calls:
+        result["tool_calls"] = tool_calls
+
+    return result

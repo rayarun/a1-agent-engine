@@ -584,7 +584,8 @@ func trackLLMCost(ctx context.Context, req openai.ChatCompletionRequest, resp op
 }
 
 func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRequest) {
-	log.Printf("Anthropic Inference (native format): Handling request for model %s", req.Model)
+	startTime := time.Now()
+	log.Printf("[TIMING] Anthropic Inference START: model=%s", req.Model)
 
 	mu.RLock()
 	key := anthropicKey
@@ -669,6 +670,7 @@ func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRe
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
 	client := &http.Client{Timeout: 2 * time.Minute}
+	reqTime := time.Now()
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		log.Printf("=== Anthropic Request FAILED ===")
@@ -676,10 +678,12 @@ func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRe
 		handleMockInference(w, req)
 		return
 	}
+	httpTime := time.Since(reqTime).Milliseconds()
 	defer resp.Body.Close()
 
 	log.Printf("=== Anthropic Response ===")
 	log.Printf("Status Code: %d", resp.StatusCode)
+	log.Printf("[TIMING] HTTP request completed in %dms", httpTime)
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -688,8 +692,12 @@ func handleAnthropicInference(w http.ResponseWriter, req openai.ChatCompletionRe
 		return
 	}
 
+	decodeTime := time.Now()
 	var antResp anthropicResponse
 	json.NewDecoder(resp.Body).Decode(&antResp)
+	decodeMs := time.Since(decodeTime).Milliseconds()
+	totalMs := time.Since(startTime).Milliseconds()
+	log.Printf("[TIMING] Response decoded in %dms, total time: %dms", decodeMs, totalMs)
 
 	// Translate Back to OpenAI
 	openaiResp := openai.ChatCompletionResponse{
@@ -744,7 +752,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("=== handleChatCompletions START: model=%s (NATIVE_ANTHRO_ADDED) ===", req.Model)
+	log.Printf("=== handleChatCompletions START: model=%s ===", req.Model)
 
 	// Mock mode for testing
 	if strings.Contains(req.Model, "mock") {
@@ -753,24 +761,33 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If in anthropic mode with custom proxy URL, use native Anthropic handler
 	mu.RLock()
 	anthropicURL_ := anthropicURL
 	anthropicKey_ := anthropicKey
 	mu.RUnlock()
 
-	log.Printf("DEBUG: anthropicURL_=%s, anthropicKey_set=%v, isClaudeModel=%v, isCustomURL=%v",
-		anthropicURL_, anthropicKey_ != "", strings.Contains(req.Model, "claude"),
-		anthropicURL_ != "https://api.anthropic.com/v1/messages")
+	usingCorporateProxy := anthropicKey_ != "" && anthropicURL_ != "https://api.anthropic.com/v1/messages" && anthropicURL_ != ""
 
-	if anthropicKey_ != "" && anthropicURL_ != "https://api.anthropic.com/v1/messages" && anthropicURL_ != "" && strings.Contains(req.Model, "claude") {
-		log.Println("-> Routing to Anthropic (native format)")
-		handleAnthropicInference(w, req)
+	log.Printf("DEBUG: usingCorporateProxy=%v, isClaudeModel=%v, anthropicURL_=%s",
+		usingCorporateProxy, strings.Contains(req.Model, "claude"), anthropicURL_)
+
+	// When using corporate proxy, route ALL models through native handler
+	// (corporate proxy expects Anthropic format, not OpenAI format)
+	if usingCorporateProxy {
+		if strings.Contains(req.Model, "claude") {
+			log.Println("-> Routing to Anthropic via corporate proxy (native format)")
+			handleAnthropicInference(w, req)
+			return
+		}
+		// For non-Claude models with corporate proxy, we can't use OpenAI format
+		// Fall back to mock since the proxy expects Anthropic format
+		log.Printf("-> Corporate proxy in use but model is not Claude (%s), falling back to mock", req.Model)
+		handleMockInference(w, req)
 		return
 	}
 
-	// Call liteLLM proxy with graceful fallback
-	log.Printf("-> Routing to liteLLM: model=%s, url=%s", req.Model, liteLLMURL)
+	// When using platform liteLLM (no corporate proxy), route via OpenAI format
+	log.Printf("-> Routing to platform liteLLM: model=%s, url=%s", req.Model, liteLLMURL)
 	liteLLMReq := liteLLMRequest{
 		Model:       req.Model,
 		Messages:    req.Messages,
@@ -801,22 +818,18 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	// Add authentication for corporate proxy
-	mu.RLock()
-	key := anthropicKey
-	mu.RUnlock()
-	if key != "" {
-		httpReq.Header.Set("x-api-key", key)
-	}
-
 	client := &http.Client{Timeout: 2 * time.Minute}
+	startTime := time.Now()
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		log.Printf("liteLLM request failed: %v (falling back to mock)", err)
 		handleMockInference(w, req)
 		return
 	}
+	httpTime := time.Since(startTime).Milliseconds()
 	defer httpResp.Body.Close()
+
+	log.Printf("[TIMING] liteLLM HTTP request completed in %dms", httpTime)
 
 	if httpResp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(httpResp.Body)
@@ -825,12 +838,15 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	decodeTime := time.Now()
 	var resp openai.ChatCompletionResponse
 	if err := json.NewDecoder(httpResp.Body).Decode(&resp); err != nil {
 		log.Printf("liteLLM response decode error: %v (falling back to mock)", err)
 		handleMockInference(w, req)
 		return
 	}
+	decodeMs := time.Since(decodeTime).Milliseconds()
+	log.Printf("[TIMING] liteLLM response decoded in %dms", decodeMs)
 
 	// Track cost asynchronously
 	trackLLMCost(r.Context(), req, resp)

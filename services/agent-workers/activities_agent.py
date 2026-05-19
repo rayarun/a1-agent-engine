@@ -271,11 +271,14 @@ async def pydantic_ai_reasoning_step(
         - messages_delta: list[dict] (updated message history)
         - continue_loop: bool (whether to continue reasoning)
     """
+    import time
     from models import AgentContext, MCPToolDefinition
     from pydantic_ai_agent import build_agent_with_tools, convert_response_to_decision
 
     import sys
     agent_id = context_dict.get('agent_id')
+    activity_start = time.time()
+    logging.info(f"[TIMING] pydantic_ai_reasoning_step START for agent {agent_id}")
     logging.info(f"PydanticAI reasoning step for agent {agent_id}")
 
     try:
@@ -310,10 +313,13 @@ async def pydantic_ai_reasoning_step(
         # because PydanticAI manages message history internally
         logging.info(f"[STEP 6] Calling PydanticAI agent with {len(mcp_tools)} MCP tools and max_tokens=20000")
         logging.info(f"[STEP 6] Model: {context.model}, Prompt length: {len(context.prompt)}, System prompt length: {len(context.system_prompt)}")
+        agent_run_start = time.time()
         response = await agent.run(
             user_prompt=context.prompt,
             model_settings=ModelSettings(max_tokens=20000, budget_tokens=0),
         )
+        agent_run_elapsed = (time.time() - agent_run_start) * 1000
+        logging.info(f"[TIMING] LLM agent.run() completed in {agent_run_elapsed:.0f}ms")
         logging.info(f"[STEP 7] Response received: type={type(response)}")
 
         # Log raw response size before processing - write directly to file
@@ -389,10 +395,13 @@ async def pydantic_ai_reasoning_step(
 
         logging.info(f"Returning decision with {len(result)} fields: {list(result.keys())}")
         logging.info(f"Token usage: tokens_in={tokens_in}, tokens_out={tokens_out}")
+        activity_elapsed = (time.time() - activity_start) * 1000
+        logging.info(f"[TIMING] pydantic_ai_reasoning_step completed in {activity_elapsed:.0f}ms")
         return result
 
     except Exception as e:
-        logging.error(f"PydanticAI reasoning step failed: {e}", exc_info=True)
+        activity_elapsed = (time.time() - activity_start) * 1000
+        logging.error(f"[TIMING] pydantic_ai_reasoning_step failed in {activity_elapsed:.0f}ms: {e}", exc_info=True)
         logging.error(f"Exception type: {type(e)}", exc_info=False)
         return {
             "final_answer": None,

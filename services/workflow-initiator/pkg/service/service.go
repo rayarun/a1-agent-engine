@@ -112,6 +112,8 @@ func SendWorkflowSignal(workflowID, signalName string, payload interface{}) erro
 // HandleStartSession dispatches a new AgentWorkflow to Temporal.
 // If the request does not include a manifest, it fetches it from the agent-registry.
 func HandleStartSession(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+
 	var req models.StartSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -126,16 +128,20 @@ func HandleStartSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[TIMING] HandleStartSession START: agent_id=%s, session_id=%s", req.AgentID, req.SessionID)
+
 	// Fetch manifest from agent-registry when not supplied by caller.
 	log.Printf("[INITIATOR] Received request: agent_id=%s, tenant_id=%s, manifest_provided=%v",
 		req.AgentID, req.TenantID, req.Manifest != nil)
 
+	manifestStart := time.Now()
 	if req.Manifest == nil {
 		log.Printf("[INITIATOR] Manifest not provided, fetching from registry for agent_id=%s, tenant_id=%s",
 			req.AgentID, req.TenantID)
 		if manifest := fetchManifest(r.Context(), req.AgentID, req.TenantID); manifest != nil {
-			log.Printf("[INITIATOR] Manifest fetched successfully: model=%s, system_prompt_len=%d, max_iterations=%d",
-				manifest.Model, len(manifest.SystemPrompt), manifest.MaxIterations)
+			manifestTime := time.Since(manifestStart).Milliseconds()
+			log.Printf("[TIMING] Manifest fetch completed in %dms: model=%s, system_prompt_len=%d, max_iterations=%d",
+				manifestTime, manifest.Model, len(manifest.SystemPrompt), manifest.MaxIterations)
 			req.Manifest = manifest
 		} else {
 			log.Printf("[INITIATOR] Failed to fetch manifest, using nil (workflow will use defaults)")
@@ -171,14 +177,17 @@ func HandleStartSession(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[INITIATOR] Passing manifest to Temporal: model=%s, keys=%d", req.Manifest.Model, len(manifestMap))
 	}
 
+	dispatchStart := time.Now()
 	we, err := temporalClient.ExecuteWorkflow(context.Background(), workflowOptions, "AgentWorkflow", reqMap)
 	if err != nil {
 		log.Printf("Failed to dispatch workflow: %v", err)
 		http.Error(w, fmt.Sprintf("Failed to dispatch workflow: %v", err), http.StatusInternalServerError)
 		return
 	}
+	dispatchTime := time.Since(dispatchStart).Milliseconds()
+	totalTime := time.Since(startTime).Milliseconds()
 
-	log.Printf("Started workflow: ID=%s, RunID=%s", we.GetID(), we.GetRunID())
+	log.Printf("[TIMING] Started workflow: ID=%s, RunID=%s (dispatch=%dms, total=%dms)", we.GetID(), we.GetRunID(), dispatchTime, totalTime)
 
 	resp := models.SessionStatus{
 		WorkflowID: we.GetID(),
