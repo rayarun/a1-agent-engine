@@ -14,7 +14,7 @@
 
 -- Hybrid Workflow Platform: Registry and Run Tracking
 
-CREATE TABLE workflow_registrations (
+CREATE TABLE IF NOT EXISTS workflow_registrations (
     id TEXT NOT NULL,
     tenant_id TEXT NOT NULL,
     name TEXT,
@@ -33,16 +33,20 @@ CREATE TABLE workflow_registrations (
     CONSTRAINT valid_status CHECK (status IN ('active', 'paused', 'archived'))
 );
 
-CREATE INDEX idx_workflow_registrations_tenant_status ON workflow_registrations(tenant_id, status);
-CREATE INDEX idx_workflow_registrations_task_queue ON workflow_registrations(task_queue);
+CREATE INDEX IF NOT EXISTS idx_workflow_registrations_tenant_status ON workflow_registrations(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_workflow_registrations_task_queue ON workflow_registrations(task_queue);
 
 -- RLS policy for workflow_registrations
 ALTER TABLE workflow_registrations ENABLE ROW LEVEL SECURITY;
-CREATE POLICY workflow_registrations_tenant_isolation ON workflow_registrations
-    USING (tenant_id = current_setting('app.tenant_id')::text);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'workflow_registrations_tenant_isolation' AND tablename = 'workflow_registrations') THEN
+    CREATE POLICY workflow_registrations_tenant_isolation ON workflow_registrations USING (tenant_id = current_setting('app.tenant_id')::text);
+  END IF;
+END $$;
 
 
-CREATE TABLE workflow_runs (
+CREATE TABLE IF NOT EXISTS workflow_runs (
     run_id TEXT PRIMARY KEY,
     workflow_id TEXT NOT NULL,
     tenant_id TEXT NOT NULL,
@@ -59,19 +63,23 @@ CREATE TABLE workflow_runs (
     CONSTRAINT valid_status CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled'))
 );
 
-CREATE INDEX idx_workflow_runs_tenant_workflow ON workflow_runs(tenant_id, workflow_id);
-CREATE INDEX idx_workflow_runs_tenant_status ON workflow_runs(tenant_id, status);
-CREATE INDEX idx_workflow_runs_started_at ON workflow_runs(started_at DESC);
-CREATE INDEX idx_workflow_runs_temporal_id ON workflow_runs(temporal_workflow_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_tenant_workflow ON workflow_runs(tenant_id, workflow_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_tenant_status ON workflow_runs(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_started_at ON workflow_runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_temporal_id ON workflow_runs(temporal_workflow_id);
 
 -- RLS policy for workflow_runs
 ALTER TABLE workflow_runs ENABLE ROW LEVEL SECURITY;
-CREATE POLICY workflow_runs_tenant_isolation ON workflow_runs
-    USING (tenant_id = current_setting('app.tenant_id')::text);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'workflow_runs_tenant_isolation' AND tablename = 'workflow_runs') THEN
+    CREATE POLICY workflow_runs_tenant_isolation ON workflow_runs USING (tenant_id = current_setting('app.tenant_id')::text);
+  END IF;
+END $$;
 
 
 -- HITL Approval tracking (durability fix)
-CREATE TABLE hitl_approvals (
+CREATE TABLE IF NOT EXISTS hitl_approvals (
     id TEXT PRIMARY KEY,
     workflow_id TEXT NOT NULL,
     tenant_id TEXT NOT NULL,
@@ -88,11 +96,15 @@ CREATE TABLE hitl_approvals (
     CONSTRAINT valid_status CHECK (status IN ('pending', 'approved', 'denied', 'expired'))
 );
 
-CREATE INDEX idx_hitl_approvals_tenant_status ON hitl_approvals(tenant_id, status);
-CREATE INDEX idx_hitl_approvals_workflow_id ON hitl_approvals(workflow_id);
-CREATE INDEX idx_hitl_approvals_expires_at ON hitl_approvals(expires_at);
+CREATE INDEX IF NOT EXISTS idx_hitl_approvals_tenant_status ON hitl_approvals(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_hitl_approvals_workflow_id ON hitl_approvals(workflow_id);
+CREATE INDEX IF NOT EXISTS idx_hitl_approvals_expires_at ON hitl_approvals(expires_at);
 
 -- RLS policy for hitl_approvals
 ALTER TABLE hitl_approvals ENABLE ROW LEVEL SECURITY;
-CREATE POLICY hitl_approvals_tenant_isolation ON hitl_approvals
-    USING (tenant_id = current_setting('app.tenant_id')::text);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'hitl_approvals_tenant_isolation' AND tablename = 'hitl_approvals') THEN
+    CREATE POLICY hitl_approvals_tenant_isolation ON hitl_approvals USING (tenant_id = current_setting('app.tenant_id')::text);
+  END IF;
+END $$;
