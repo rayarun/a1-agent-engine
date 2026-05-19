@@ -241,7 +241,7 @@ services:
     restart: on-failure
     environment:
       - TEMPORAL_HOSTPORT=temporal:7233
-      - LITELLM_BASE_URL=http://litellm:8000/v1
+      - LITELLM_BASE_URL=http://litellm:4000/v1
       - LITELLM_API_KEY=sk-litellm
       - TEMPORAL_TASK_QUEUE=default-tenant-agent-queue
       - SANDBOX_MANAGER_URL=http://sandbox-manager:8082/api/v1/execute
@@ -267,7 +267,7 @@ services:
     restart: on-failure
     environment:
       - TEMPORAL_HOSTPORT=temporal:7233
-      - LITELLM_BASE_URL=http://litellm:8000/v1
+      - LITELLM_BASE_URL=http://litellm:4000/v1
       - LITELLM_API_KEY=sk-litellm
       - TEMPORAL_TASK_QUEUE=platform-system-agent-queue
       - SANDBOX_MANAGER_URL=http://sandbox-manager:8082/api/v1/execute
@@ -401,7 +401,7 @@ services:
       - COOKBOOKS_DIR=/app/infra/platform/cookbooks
       - AGENT_REGISTRY_URL=http://agent-registry:8088
       - KG_SERVICE_URL=http://kg-service:8093
-      - LITELLM_BASE_URL=http://litellm:8000/v1
+      - LITELLM_BASE_URL=http://litellm:4000/v1
       - LITELLM_CONFIG_PATH=/etc/litellm/config.yaml
     volumes:
       - ../../infra/platform/cookbooks:/app/infra/platform/cookbooks:rw
