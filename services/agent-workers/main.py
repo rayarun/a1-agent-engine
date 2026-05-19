@@ -22,6 +22,10 @@ try:
     from temporalio.client import Client
     from temporalio.worker import Worker
 
+    # CRITICAL: Import pydantic_ai_agent FIRST to apply monkey patch before any Usage objects are created.
+    # This import triggers module-level code that patches PydanticAI's Usage.incr method.
+    import pydantic_ai_agent  # noqa: F401
+
     # Workflows are deterministic
     from workflows import AgentWorkflow, HybridWorkflow
 

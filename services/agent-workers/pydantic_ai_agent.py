@@ -38,6 +38,27 @@ from models import AgentContext, ToolCall, MCPToolDefinition
 
 logger = logging.getLogger(__name__)
 
+# Apply monkey patch at module load time to fix PydanticAI usage aggregation
+try:
+    from pydantic_ai.usage import Usage
+    _original_incr = Usage.incr
+
+    def _patched_incr(self, other):
+        """Skip dict values in nested response details that cause TypeError."""
+        if other is None:
+            return
+        if not hasattr(other, 'details'):
+            return
+        for key, value in other.details.items():
+            # Only aggregate numeric types, skip dicts from nested response details
+            if isinstance(value, (int, float)):
+                self.details[key] = self.details.get(key, 0) + value
+
+    Usage.incr = _patched_incr
+    print(f"[PATCH] PydanticAI Usage.incr patched at module load time", flush=True)
+except Exception as e:
+    print(f"[PATCH] Failed to patch Usage.incr: {e}", flush=True)
+
 
 class AgentToolRegistry:
     """Registry and builder for agent tools."""
@@ -350,37 +371,6 @@ async def build_agent_with_tools(
     """
     import os
     from pydantic_ai.models import infer_model
-
-    # Monkey-patch PydanticAI Usage to skip dict values in nested response details
-    import sys
-    if 'pydantic_ai.usage' not in sys.modules:
-        try:
-            from pydantic_ai import usage as usage_module
-            logger.info("[build_agent] Importing pydantic_ai.usage module")
-        except Exception as e:
-            logger.warning(f"[build_agent] Could not import usage module: {e}")
-
-    try:
-        from pydantic_ai.usage import Usage
-        logger.info(f"[build_agent] Got Usage class: {Usage}")
-
-        # Create patched incr method
-        def safe_incr(self, other):
-            """Patched incr() that safely handles nested dicts from response details."""
-            if other is None:
-                return
-            if not hasattr(other, 'details'):
-                return
-            for key, value in other.details.items():
-                # Skip dicts and other non-numeric types to prevent type errors
-                if not isinstance(value, (int, float)):
-                    continue
-                self.details[key] = self.details.get(key, 0) + value
-
-        Usage.incr = safe_incr
-        logger.info("[build_agent] ✓ Patched PydanticAI Usage.incr successfully")
-    except Exception as e:
-        logger.error(f"[build_agent] ✗ Failed to patch Usage.incr: {e}", exc_info=True)
 
     # Configure PydanticAI to use LiteLLM proxy (OpenAI-compatible endpoint)
     # LiteLLM handles provider routing, format conversion, and credential management
