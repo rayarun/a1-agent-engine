@@ -132,7 +132,7 @@ with tab3:
     st.header("Component Status")
     services = {
         "API Gateway": API_GATEWAY_URL + "/health",
-        "LLM Gateway": "http://llm-gateway:8083/health",
+        "LiteLLM": "http://litellm:8000/health",
         "Sandbox Manager": "http://sandbox-manager:8082/health"
     }
     

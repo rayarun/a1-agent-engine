@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	_ "github.com/lib/pq"
 
@@ -58,12 +59,15 @@ func main() {
 		log.Println("KG Service: using in-memory store (set DATABASE_URL for production)")
 	}
 
-	llmGatewayURL := os.Getenv("LLM_GATEWAY_URL")
-	if llmGatewayURL == "" {
-		llmGatewayURL = "http://llm-gateway:8083"
+	litellmURL := os.Getenv("LITELLM_BASE_URL")
+	if litellmURL == "" {
+		litellmURL = "http://litellm:8000"
+	} else {
+		// Strip /v1 suffix if present (handler adds it)
+		litellmURL = strings.TrimSuffix(litellmURL, "/v1")
 	}
 
-	h := service.NewHandler(s, llmGatewayURL)
+	h := service.NewHandler(s, litellmURL)
 	mux := service.BuildMux(h)
 
 	addr := ":8093"

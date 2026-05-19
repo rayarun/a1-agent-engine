@@ -256,8 +256,8 @@ func handleWebFetch() http.HandlerFunc {
 		}
 
 		summary := textContent
-		llmGatewayURL := os.Getenv("LLM_GATEWAY_URL")
-		if llmGatewayURL != "" && req.Args.Query != "" {
+		litellmURL := os.Getenv("LITELLM_BASE_URL")
+		if litellmURL != "" && req.Args.Query != "" {
 			summaryReq := map[string]interface{}{
 				"model": "claude-haiku-4-5-20251001",
 				"messages": []map[string]string{
@@ -271,7 +271,7 @@ func handleWebFetch() http.HandlerFunc {
 			}
 
 			summaryBody, _ := json.Marshal(summaryReq)
-			summaryHTTPReq, _ := http.NewRequestWithContext(ctx, "POST", llmGatewayURL+"/chat/completions", bytes.NewReader(summaryBody))
+			summaryHTTPReq, _ := http.NewRequestWithContext(ctx, "POST", litellmURL+"/chat/completions", bytes.NewReader(summaryBody))
 			summaryHTTPReq.Header.Set("Content-Type", "application/json")
 
 			if summaryResp, err := client.Do(summaryHTTPReq); err == nil && summaryResp.StatusCode == http.StatusOK {

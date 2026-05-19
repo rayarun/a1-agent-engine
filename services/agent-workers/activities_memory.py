@@ -34,7 +34,7 @@ async def recall_memories(query: str, agent_id: str, limit: int = 3) -> list[str
     logging.info(f"Recalling memories for agent {agent_id}: {query}")
     
     # 1. Get Embedding for query via LLM Gateway
-    gateway_url = os.getenv("LLM_GATEWAY_URL", "http://localhost:8083/v1")
+    gateway_url = os.getenv("LITELLM_BASE_URL", "http://localhost:8000/v1")
     client = AsyncOpenAI(base_url=gateway_url, api_key="sk-mock")
     
     try:
@@ -67,7 +67,7 @@ async def store_memory(content: str, agent_id: str, metadata: dict = None) -> bo
     """Stores a new fact or observation as a vector memory."""
     logging.info(f"Storing memory for agent {agent_id}: {content[:50]}...")
     
-    gateway_url = os.getenv("LLM_GATEWAY_URL", "http://localhost:8083/v1")
+    gateway_url = os.getenv("LITELLM_BASE_URL", "http://localhost:8000/v1")
     client = AsyncOpenAI(base_url=gateway_url, api_key="sk-mock")
     
     try:

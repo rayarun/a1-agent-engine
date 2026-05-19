@@ -197,9 +197,9 @@ async def resolve_mcp_servers(tenant_id: str, explicit_server_ids: list[str]) ->
 async def reasoning_step(messages: list[dict], model: str, tool_defs: Optional[list[dict]] = None) -> dict:
     """Executes a single LLM reasoning step via the LLM Gateway."""
     logging.info(f"[REASONING_STEP] Called with model={model}")
-    logging.info(f"[REASONING_STEP] LLM_GATEWAY_URL={os.getenv('LLM_GATEWAY_URL')}")
+    logging.info(f"[REASONING_STEP] LITELLM_BASE_URL={os.getenv('LITELLM_BASE_URL')}")
 
-    gateway_url = os.getenv("LLM_GATEWAY_URL", "http://localhost:8083/v1")
+    gateway_url = os.getenv("LITELLM_BASE_URL", "http://localhost:8000/v1")
     client = AsyncOpenAI(base_url=gateway_url, api_key="sk-mock-key")
 
     tools = tool_defs if tool_defs is not None else [_default_execute_code_tool()]
@@ -304,7 +304,7 @@ async def pydantic_ai_reasoning_step(
         # Build agent with all registered tools
         # Note: workflow_ref is None here; tool invocations will use workflow.execute_activity
         logging.info(f"[STEP 4] Building agent with model={context.model}, {len(mcp_tools)} tools")
-        logging.info(f"[STEP 4] LLM_GATEWAY_URL={os.getenv('LLM_GATEWAY_URL')}")
+        logging.info(f"[STEP 4] LITELLM_BASE_URL={os.getenv('LITELLM_BASE_URL')}")
         agent = await build_agent_with_tools(context, workflow_ref=None, mcp_tools=mcp_tools)
         logging.info(f"[STEP 5] Agent built successfully")
 

@@ -351,10 +351,10 @@ async def build_agent_with_tools(
     import os
     from pydantic_ai.models import infer_model
 
-    # Set environment variables for LLM Gateway configuration
-    # PydanticAI uses OPENAI_BASE_URL and OPENAI_API_KEY automatically
-    os.environ.setdefault("OPENAI_BASE_URL", os.getenv("LLM_GATEWAY_URL", "http://localhost:8083/v1"))
-    os.environ.setdefault("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", "sk-mock-key"))
+    # Configure PydanticAI to use LiteLLM proxy (OpenAI-compatible endpoint)
+    # LiteLLM handles provider routing, format conversion, and credential management
+    os.environ.setdefault("OPENAI_BASE_URL", os.getenv("LITELLM_BASE_URL", "http://localhost:8000/v1"))
+    os.environ.setdefault("OPENAI_API_KEY", os.getenv("LITELLM_API_KEY", "sk-litellm"))
 
     # Let PydanticAI infer and configure the model from environment
     logger.info(f"[build_agent] Inferring model: openai:{context.model}")

@@ -206,10 +206,8 @@ services:
       - "8082:8082"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - LLM_GATEWAY_URL=http://llm-gateway:8083/v1
     depends_on:
-      - llm-gateway
+      - litellm
     networks:
       - agent-net
 
@@ -233,27 +231,6 @@ services:
       - agent-net
 
   # ------------------------------------
-  # LLM Gateway  (port 8083)
-  # ------------------------------------
-  llm-gateway:
-    build:
-      context: ../../
-      dockerfile: services/llm-gateway/Dockerfile
-    container_name: llm-gateway
-    ports:
-      - "8083:8083"
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    networks:
-      - agent-net
-
-  # ------------------------------------
   # Agent Workers (Temporal Python)
   # ------------------------------------
   agent-workers:
@@ -264,7 +241,8 @@ services:
     restart: on-failure
     environment:
       - TEMPORAL_HOSTPORT=temporal:7233
-      - LLM_GATEWAY_URL=http://llm-gateway:8083/v1
+      - LITELLM_BASE_URL=http://litellm:8000/v1
+      - LITELLM_API_KEY=sk-litellm
       - TEMPORAL_TASK_QUEUE=default-tenant-agent-queue
       - SANDBOX_MANAGER_URL=http://sandbox-manager:8082/api/v1/execute
       - SKILL_DISPATCHER_URL=http://skill-dispatcher:8085
@@ -272,6 +250,7 @@ services:
       - POSTGRES_URL=postgresql://postgres:postgres@postgres:5432/agentplatform?sslmode=disable
     depends_on:
       - temporal
+      - litellm
       - sandbox-manager
       - tool-registry
     networks:
@@ -288,7 +267,8 @@ services:
     restart: on-failure
     environment:
       - TEMPORAL_HOSTPORT=temporal:7233
-      - LLM_GATEWAY_URL=http://llm-gateway:8083/v1
+      - LITELLM_BASE_URL=http://litellm:8000/v1
+      - LITELLM_API_KEY=sk-litellm
       - TEMPORAL_TASK_QUEUE=platform-system-agent-queue
       - SANDBOX_MANAGER_URL=http://sandbox-manager:8082/api/v1/execute
       - SKILL_DISPATCHER_URL=http://skill-dispatcher:8085
@@ -298,6 +278,7 @@ services:
       - BEARTYPE_ERROR_ON_NONFATAL_VIOLATION=0
     depends_on:
       - temporal
+      - litellm
       - sandbox-manager
       - tool-registry
     networks:
@@ -420,13 +401,15 @@ services:
       - COOKBOOKS_DIR=/app/infra/platform/cookbooks
       - AGENT_REGISTRY_URL=http://agent-registry:8088
       - KG_SERVICE_URL=http://kg-service:8093
-      - LLM_GATEWAY_URL=http://llm-gateway:8083
+      - LITELLM_BASE_URL=http://litellm:8000/v1
     volumes:
       - ../../infra/platform/cookbooks:/app/infra/platform/cookbooks:rw
     depends_on:
       migrate:
         condition: service_completed_successfully
       temporal:
+        condition: service_started
+      litellm:
         condition: service_started
     networks:
       - agent-net
