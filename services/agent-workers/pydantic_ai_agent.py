@@ -49,6 +49,8 @@ try:
             return
         if not hasattr(other, 'details') or other.details is None:
             return
+        if self.details is None:
+            self.details = {}
         for key, value in other.details.items():
             # Only aggregate numeric types, skip dicts from nested response details
             if isinstance(value, (int, float)):

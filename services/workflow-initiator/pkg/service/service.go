@@ -123,6 +123,14 @@ func HandleStartSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent_id is required", http.StatusBadRequest)
 		return
 	}
+
+	// Extract tenant_id from X-Tenant-ID header if not in request body
+	if req.TenantID == "" {
+		req.TenantID = r.Header.Get("X-Tenant-ID")
+		if req.TenantID == "" {
+			req.TenantID = "default-tenant"
+		}
+	}
 	if temporalClient == nil {
 		http.Error(w, "Temporal client not connected", http.StatusServiceUnavailable)
 		return
