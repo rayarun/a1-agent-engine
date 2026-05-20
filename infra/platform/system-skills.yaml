@@ -9,16 +9,14 @@ skills:
     name: diagnostic-agent
     version: "1.0.0"
     description: Performs system diagnostics - collects system information, logs, and health metrics
-    tools:
-      - name: bash
-        version: "1.0.0"
+    agent_id: diagnostic-agent
     mutating: false
     approval_required: false
     sop: |
       System Diagnostic Skill
-      Purpose: Collect comprehensive system diagnostics
+      Purpose: Collect comprehensive system diagnostics via sub-agent
 
-      Operations:
+      The diagnostic-agent sub-agent will:
       1. System Information
          - OS version, kernel, uptime
          - CPU and memory statistics
@@ -41,6 +39,7 @@ skills:
     _metadata:
       registered_by: platform-admin
       requires_infrastructure_access: true
+      execution_type: agent-based
 
   - id: system-skill-deployment-checker
     name: deployment-checker
@@ -94,16 +93,14 @@ skills:
     name: log-analyzer
     version: "1.0.0"
     description: Analyzes logs for errors, warnings, and anomalies - extracts patterns and root causes
-    tools:
-      - name: bash
-        version: "1.0.0"
+    agent_id: log-analyzer
     mutating: false
     approval_required: false
     sop: |
       Log Analyzer Skill
-      Purpose: Extract insights from system and application logs
+      Purpose: Extract insights from system and application logs via sub-agent
 
-      Analysis Operations:
+      The log-analyzer sub-agent will:
       1. Error Detection
          - Count error occurrences by type
          - Identify error patterns
@@ -126,6 +123,7 @@ skills:
     _metadata:
       registered_by: platform-admin
       requires_infrastructure_access: true
+      execution_type: agent-based
 
   - id: system-skill-backup-validator
     name: backup-validator
