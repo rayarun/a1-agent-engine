@@ -467,28 +467,46 @@ async def extract_tool_calls_from_response(response: Any) -> list[ToolCall]:
 
     PydanticAI tool calls are in response.all_messages() as ModelResponse.parts
     with part_kind='tool-call'. Tool execution happens internally in agent.run(),
-    so this typically returns empty list for text-only responses.
+    so results are available via part_kind='tool-return' parts paired by tool_call_id.
 
     Args:
         response: PydanticAI AgentRunResult
 
     Returns:
-        List of ToolCall objects
+        List of ToolCall objects with results populated
     """
     tool_calls = []
+    tool_results = {}  # tool_call_id -> result
     try:
+        import json
         from pydantic_ai.messages import ModelResponse
 
-        # Use .all_messages() method to get message history
+        # First pass: collect tool results by tool_call_id
+        for msg in response.all_messages():
+            if isinstance(msg, ModelResponse):
+                for part in msg.parts:
+                    if getattr(part, "part_kind", None) == "tool-return":
+                        tool_call_id = getattr(part, "tool_call_id", "")
+                        raw_result = getattr(part, "content", "")
+                        # Try to JSON-parse for richer result objects; fall back to string
+                        try:
+                            parsed_result = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
+                        except (json.JSONDecodeError, TypeError):
+                            parsed_result = raw_result
+                        tool_results[tool_call_id] = parsed_result
+
+        # Second pass: build ToolCall objects with results
         for msg in response.all_messages():
             if isinstance(msg, ModelResponse):
                 for part in msg.parts:
                     if getattr(part, "part_kind", None) == "tool-call":
+                        tool_call_id = getattr(part, "tool_call_id", "")
                         tool_calls.append(
                             ToolCall(
-                                id=getattr(part, "tool_call_id", ""),
+                                id=tool_call_id,
                                 name=getattr(part, "tool_name", ""),
                                 arguments=part.args_as_dict() if hasattr(part, "args_as_dict") else {},
+                                result=tool_results.get(tool_call_id),  # Include result if available
                             )
                         )
     except Exception as e:

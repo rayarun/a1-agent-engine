@@ -75,6 +75,7 @@ class ToolCall(BaseModel):
     id: str = Field(..., description="Unique tool call ID")
     name: str = Field(..., description="Tool name (e.g., 'execute_code', 'mcp__server__tool')")
     arguments: dict = Field(default_factory=dict, description="Tool arguments")
+    result: Optional[Any] = Field(default=None, description="Tool execution result (populated after execution)")
 
 
 class ToolResult(BaseModel):

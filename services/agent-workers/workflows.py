@@ -188,11 +188,14 @@ class AgentWorkflow:
                         if isinstance(tool_args, str):
                             tool_args = json.loads(tool_args)
 
-                        self._emit({
+                        event = {
                             "type": "tool_call",
                             "tool_name": tool_name,
                             "tool_args": tool_args
-                        })
+                        }
+                        if tc.get("result") is not None:
+                            event["tool_result"] = tc.get("result")
+                        self._emit(event)
 
                         # Execute execute_code tool
                         if tool_name == "execute_code":
@@ -261,11 +264,14 @@ class AgentWorkflow:
                     for tc in tool_calls:
                         tool_name = tc.get("name", "unknown")
                         tool_args = tc.get("arguments", {})
-                        self._emit({
+                        event = {
                             "type": "tool_call",
                             "tool_name": tool_name,
                             "tool_args": tool_args
-                        })
+                        }
+                        if tc.get("result") is not None:
+                            event["tool_result"] = tc.get("result")
+                        self._emit(event)
 
                     # Note: Tool invocations and result collection happen inside
                     # pydantic_ai_reasoning_step. The messages here are pre-updated.
