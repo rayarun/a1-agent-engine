@@ -332,3 +332,27 @@ tools:
       sandbox_required: false
       registered_by: platform-admin
 
+  - id: system-tool-kg-semantic-search
+    name: kg-semantic-search
+    version: "1.0.0"
+    description: Search knowledge graph nodes by semantic similarity using vector embeddings
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Natural language query to search for semantically similar nodes
+        graph_id:
+          type: string
+          description: UUID of the knowledge graph (optional - searches all if omitted)
+        limit:
+          type: integer
+          description: Maximum number of results (default 10)
+          default: 10
+      required:
+        - query
+    _metadata:
+      auth_level: read
+      sandbox_required: false
+      registered_by: platform-admin
+
