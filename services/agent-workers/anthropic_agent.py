@@ -65,6 +65,9 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
     # Initialize or resume message history
     if messages is None or len(messages) == 0:
         messages = [{"role": "user", "content": context.get('prompt', 'Help me')}]
+    else:
+        # Filter out system role messages (Anthropic API doesn't accept them in messages array)
+        messages = [m for m in messages if m.get("role") != "system"]
 
     tokens_in = 0
     tokens_out = 0
