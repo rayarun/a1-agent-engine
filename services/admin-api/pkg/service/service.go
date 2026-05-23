@@ -2175,11 +2175,6 @@ func (h *AdminHandler) createAgentFromYAML(ctx context.Context, yamlPath string,
 
 // HandleListModelRoutes lists all model routes for a tenant.
 func (h *AdminHandler) HandleListModelRoutes(w http.ResponseWriter, r *http.Request) {
-	tenantID := r.Header.Get("X-Tenant-ID")
-	if tenantID == "" {
-		tenantID = "default-tenant"
-	}
-
 	// Use transaction to ensure SET LOCAL affects the same connection
 	tx, err := h.DB.Begin(r.Context())
 	if err != nil {
@@ -2188,9 +2183,8 @@ func (h *AdminHandler) HandleListModelRoutes(w http.ResponseWriter, r *http.Requ
 	}
 	defer tx.Rollback(r.Context())
 
-	// Set RLS context for tenant isolation (manually escape to avoid parameter placeholder issues with SET)
-	escapedTenantID := strings.ReplaceAll(tenantID, "'", "''")
-	setLocalQuery := fmt.Sprintf("SET LOCAL app.tenant_id = '%s'", escapedTenantID)
+	// Use admin context to access all model routes
+	setLocalQuery := "SET LOCAL app.tenant_id = 'admin'"
 	if _, err := tx.Exec(r.Context(), setLocalQuery); err != nil {
 		http.Error(w, "Failed to set tenant context", http.StatusInternalServerError)
 		return
@@ -2233,6 +2227,7 @@ func (h *AdminHandler) HandleListModelRoutes(w http.ResponseWriter, r *http.Requ
 
 // HandleCreateModelRoute creates a new model route.
 func (h *AdminHandler) HandleCreateModelRoute(w http.ResponseWriter, r *http.Request) {
+	// For admin operations, allow specifying tenant via header or default to default-tenant
 	tenantID := r.Header.Get("X-Tenant-ID")
 	if tenantID == "" {
 		tenantID = "default-tenant"
@@ -2257,9 +2252,8 @@ func (h *AdminHandler) HandleCreateModelRoute(w http.ResponseWriter, r *http.Req
 	}
 	defer tx.Rollback(r.Context())
 
-	// Set RLS context for tenant isolation (manually escape to avoid parameter placeholder issues with SET)
-	escapedTenantID := strings.ReplaceAll(tenantID, "'", "''")
-	setLocalQuery := fmt.Sprintf("SET LOCAL app.tenant_id = '%s'", escapedTenantID)
+	// Use admin context to allow creating routes in any tenant
+	setLocalQuery := "SET LOCAL app.tenant_id = 'admin'"
 	if _, err := tx.Exec(r.Context(), setLocalQuery); err != nil {
 		http.Error(w, "Failed to set tenant context", http.StatusInternalServerError)
 		return
@@ -2312,11 +2306,6 @@ func (h *AdminHandler) HandleCreateModelRoute(w http.ResponseWriter, r *http.Req
 
 // HandleUpdateModelRoute updates a model route.
 func (h *AdminHandler) HandleUpdateModelRoute(w http.ResponseWriter, r *http.Request) {
-	tenantID := r.Header.Get("X-Tenant-ID")
-	if tenantID == "" {
-		tenantID = "default-tenant"
-	}
-
 	routeID := r.PathValue("id")
 	if routeID == "" {
 		http.Error(w, "Missing route ID", http.StatusBadRequest)
@@ -2337,17 +2326,18 @@ func (h *AdminHandler) HandleUpdateModelRoute(w http.ResponseWriter, r *http.Req
 	}
 	defer tx.Rollback(r.Context())
 
-	// Set RLS context for tenant isolation (manually escape to avoid parameter placeholder issues with SET)
-	escapedTenantID := strings.ReplaceAll(tenantID, "'", "''")
-	setLocalQuery := fmt.Sprintf("SET LOCAL app.tenant_id = '%s'", escapedTenantID)
+	// Use admin context to access all model routes (both system and tenant-specific)
+	setLocalQuery := "SET LOCAL app.tenant_id = 'admin'"
 	if _, err := tx.Exec(r.Context(), setLocalQuery); err != nil {
-		http.Error(w, "Failed to set tenant context", http.StatusInternalServerError)
+		fmt.Printf("[ERROR] Failed to set admin context: %v\n", err)
+		http.Error(w, fmt.Sprintf("Failed to set admin context: %v", err), http.StatusInternalServerError)
 		return
 	}
+	fmt.Printf("[DEBUG] Admin context set successfully\n")
 
 	updates := []string{}
-	args := []interface{}{routeID, tenantID}
-	argIndex := 3
+	args := []interface{}{routeID}
+	argIndex := 2
 
 	if req.ModelPattern != nil {
 		updates = append(updates, fmt.Sprintf("model_pattern = $%d", argIndex))
@@ -2386,16 +2376,18 @@ func (h *AdminHandler) HandleUpdateModelRoute(w http.ResponseWriter, r *http.Req
 	query := fmt.Sprintf(`
 		UPDATE model_routes
 		SET %s
-		WHERE id = $1 AND tenant_id = $2
+		WHERE id = $1
 		RETURNING id, tenant_id, model_pattern, endpoint_url, api_key, provider_type, status, description, created_at, updated_at
 	`, strings.Join(updates, ", "))
 
+	fmt.Printf("[DEBUG] UpdateModelRoute: routeID=%s, updates=%v\n", routeID, updates)
 	row := tx.QueryRow(r.Context(), query, args...)
 	var route models.ModelRoute
 	if err := row.Scan(&route.ID, &route.TenantID, &route.ModelPattern, &route.EndpointURL,
 		&route.APIKey, &route.ProviderType, &route.Status, &route.Description,
 		&route.CreatedAt, &route.UpdatedAt); err != nil {
-		http.Error(w, "Failed to update model route", http.StatusInternalServerError)
+		fmt.Printf("UpdateModelRoute Scan error: %v\nQuery: %s\nArgs: %v\n", err, query, args)
+		http.Error(w, fmt.Sprintf("Failed to scan model route: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -2418,11 +2410,6 @@ func (h *AdminHandler) HandleUpdateModelRoute(w http.ResponseWriter, r *http.Req
 
 // HandleDeleteModelRoute deletes a model route.
 func (h *AdminHandler) HandleDeleteModelRoute(w http.ResponseWriter, r *http.Request) {
-	tenantID := r.Header.Get("X-Tenant-ID")
-	if tenantID == "" {
-		tenantID = "default-tenant"
-	}
-
 	routeID := r.PathValue("id")
 	if routeID == "" {
 		http.Error(w, "Missing route ID", http.StatusBadRequest)
@@ -2437,18 +2424,17 @@ func (h *AdminHandler) HandleDeleteModelRoute(w http.ResponseWriter, r *http.Req
 	}
 	defer tx.Rollback(r.Context())
 
-	// Set RLS context for tenant isolation (manually escape to avoid parameter placeholder issues with SET)
-	escapedTenantID := strings.ReplaceAll(tenantID, "'", "''")
-	setLocalQuery := fmt.Sprintf("SET LOCAL app.tenant_id = '%s'", escapedTenantID)
+	// Use admin context to allow deleting routes from any tenant
+	setLocalQuery := "SET LOCAL app.tenant_id = 'admin'"
 	if _, err := tx.Exec(r.Context(), setLocalQuery); err != nil {
-		http.Error(w, "Failed to set tenant context", http.StatusInternalServerError)
+		http.Error(w, "Failed to set admin context", http.StatusInternalServerError)
 		return
 	}
 
 	_, err = tx.Exec(r.Context(), `
 		DELETE FROM model_routes
-		WHERE id = $1 AND tenant_id = $2
-	`, routeID, tenantID)
+		WHERE id = $1
+	`, routeID)
 
 	if err != nil {
 		http.Error(w, "Failed to delete model route", http.StatusInternalServerError)
