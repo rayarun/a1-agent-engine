@@ -30,10 +30,14 @@ try:
     from workflows import AgentWorkflow, HybridWorkflow
 
     # Activities are non-deterministic (all moved to separate files)
-    from activities_agent import execute_code, reasoning_step, invoke_skill, discover_mcp_tools, invoke_mcp_tool, resolve_mcp_servers, pydantic_ai_reasoning_step, fetch_system_tools, invoke_direct_tool
+    from activities_agent import execute_code, reasoning_step, invoke_skill, discover_mcp_tools, invoke_mcp_tool, resolve_mcp_servers, pydantic_ai_reasoning_step, fetch_system_tools, invoke_direct_tool, anthropic_agents_run, invoke_platform_tool
     from activities_workflow import invoke_agent, evaluate_condition
     from activities_memory import recall_memories, store_memory
     from activities_cost import record_cost_event
+
+    # TODO: Phase 4 - Register Temporal contrib plugins (OpenAIAgentsPlugin, GoogleAdkPlugin)
+    # For now, ADK and OpenAI agents route through activities without Temporal plugins
+    # This defers fine-grained durability per LLM call in favor of simpler Phase 3 implementation
 except Exception as e:
     print(f"CRITICAL STARTUP ERROR: Failed to import modules: {e}")
     sys.exit(1)
@@ -80,12 +84,14 @@ async def main():
                 execute_code,
                 reasoning_step,
                 pydantic_ai_reasoning_step,
+                anthropic_agents_run,  # New: Anthropic Agent SDK adapter
                 invoke_skill,
                 discover_mcp_tools,
                 invoke_mcp_tool,
                 resolve_mcp_servers,
                 fetch_system_tools,
                 invoke_direct_tool,
+                invoke_platform_tool,  # New: Generic tool invocation for ADK/OpenAI
                 invoke_agent,
                 evaluate_condition,
                 recall_memories,

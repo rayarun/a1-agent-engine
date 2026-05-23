@@ -436,6 +436,27 @@ async def pydantic_ai_reasoning_step(
 
 
 @activity.defn
+async def anthropic_agents_run(agent_context):
+    """
+    Anthropic Agent SDK execution activity.
+
+    Runs the full multi-turn ReAct loop for Anthropic Agent SDK inside a single Temporal activity.
+    No Temporal contrib plugin exists for Anthropic, so the entire reasoning loop is contained here
+    with durable retry semantics at the activity boundary.
+
+    Args:
+        agent_context: Agent context with agent_id, tenant_id, model, system_prompt, tools, etc.
+
+    Returns:
+        AgentDecision dict with final_answer, tool_calls, messages_delta, hitl_pending, tokens, etc.
+    """
+    from anthropic_agent import build_anthropic_agent_and_run
+
+    logging.info(f"Starting anthropic_agents_run for agent {agent_context.get('agent_id')}")
+    return await build_anthropic_agent_and_run(agent_context)
+
+
+@activity.defn
 async def invoke_platform_tool(
     tool_name: str, tool_version: str, args: dict, tenant_id: str, agent_id: str, mutating: bool
 ) -> str:
