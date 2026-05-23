@@ -26,13 +26,12 @@ import os
 from typing import Any
 
 import anthropic
-from models import AgentContext
 from platform_tool_bridge import ToolExecutionClient
 
 logger = logging.getLogger(__name__)
 
 
-async def build_anthropic_agent_and_run(context: AgentContext) -> dict:
+async def build_anthropic_agent_and_run(context: dict) -> dict:
     """
     Build and run an Anthropic Agent SDK agent.
 
@@ -47,34 +46,37 @@ async def build_anthropic_agent_and_run(context: AgentContext) -> dict:
     """
     logger.info(f"Building Anthropic agent {context.get('agent_id', 'unknown')}")
 
-    # Set up client to use LiteLLM gateway
-    litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://localhost:8000/v1")
+    # Set up client to use Anthropic API directly (bypass OpenAI-compat routing)
+    # Use configured endpoint from environment or fallback to standard Anthropic
+    anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+
     client = anthropic.AsyncAnthropic(
-        base_url=litellm_base_url,
-        api_key="sk-litellm",  # LiteLLM internal key
+        base_url=anthropic_base_url,
+        api_key=anthropic_api_key,
     )
 
-    # Normalize model string: claude-sonnet-4-6 → claude-sonnet-4-6 (already correct)
-    model = context.get('model', 'claude-haiku-4-5')
+    model = context.get('model', 'claude-opus-4-7')
 
     # Build tool definitions from platform tools
     tool_definitions = _build_tool_definitions(context)
 
-    # Initialize message history
-    messages = []
+    # Initialize message history with user prompt
+    messages = [{"role": "user", "content": context.get('prompt', 'Help me')}]
     tokens_in = 0
     tokens_out = 0
 
     # Multi-turn ReAct loop
-    for iteration in range(context.get('max_iterations', 5)):
-        logger.info(f"Iteration {iteration + 1}/{context.get('max_iterations', 5)}")
+    max_iterations = context.get('max_iterations', 5)
+    for iteration in range(max_iterations):
+        logger.info(f"Iteration {iteration + 1}/{max_iterations}")
 
         try:
             # Call Anthropic API
             response = await client.messages.create(
                 model=model,
                 max_tokens=8192,
-                system=context.get('system_prompt', ''),
+                system=context.get('system_prompt', 'You are a helpful assistant'),
                 tools=tool_definitions,
                 messages=messages,
             )
@@ -164,8 +166,18 @@ async def build_anthropic_agent_and_run(context: AgentContext) -> dict:
                         "tokens_out": tokens_out,
                     }
 
-                # Add tool results to messages
-                messages.append({"role": "user", "content": tool_results})
+                # Add tool results to messages (Anthropic format)
+                for result in tool_results:
+                    messages.append({
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": result.get("tool_use_id", ""),
+                                "content": str(result.get("content", "")),
+                            }
+                        ],
+                    })
                 continue
 
             # Unexpected stop reason
@@ -195,7 +207,7 @@ async def build_anthropic_agent_and_run(context: AgentContext) -> dict:
     }
 
 
-def _build_tool_definitions(context: AgentContext) -> list[dict]:
+def _build_tool_definitions(context: dict) -> list[dict]:
     """
     Convert platform tool specs to Anthropic tool definition format.
 

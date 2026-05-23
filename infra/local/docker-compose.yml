@@ -243,6 +243,8 @@ services:
       - TEMPORAL_HOSTPORT=temporal:7233
       - LITELLM_BASE_URL=http://litellm:4000/v1
       - LITELLM_API_KEY=sk-litellm
+      - ANTHROPIC_BASE_URL=https://llm-inference.internal.angelone.in
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-sk--d-AWAtSYtikG7GvpvGNkw}
       - TEMPORAL_TASK_QUEUE=default-tenant-agent-queue
       - SANDBOX_MANAGER_URL=http://sandbox-manager:8082/api/v1/execute
       - SKILL_DISPATCHER_URL=http://skill-dispatcher:8085
@@ -269,6 +271,8 @@ services:
       - TEMPORAL_HOSTPORT=temporal:7233
       - LITELLM_BASE_URL=http://litellm:4000/v1
       - LITELLM_API_KEY=sk-litellm
+      - ANTHROPIC_BASE_URL=https://llm-inference.internal.angelone.in
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-sk--d-AWAtSYtikG7GvpvGNkw}
       - TEMPORAL_TASK_QUEUE=platform-system-agent-queue
       - SANDBOX_MANAGER_URL=http://sandbox-manager:8082/api/v1/execute
       - SKILL_DISPATCHER_URL=http://skill-dispatcher:8085
