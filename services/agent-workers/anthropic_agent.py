@@ -88,41 +88,47 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
                         last_assistant_msg = msg
                         break
 
-                if last_assistant_msg and isinstance(last_assistant_msg.get("content"), list):
-                    for block in last_assistant_msg["content"]:
-                        if isinstance(block, dict) and block.get("type") == "tool_use":
-                            tool_name = block.get("name", "")
-                            if tool_name and tool_name in approved_tools:
-                                logger.info(f"Resuming with approved tool: {tool_name}")
-                                # Execute the approved tool directly
-                                tool_use_id = block.get("id")
-                                tool_input = block.get("input", {})
-                                tool_execution_client = ToolExecutionClient(context.get('agent_id', 'unknown'), context.get('tenant_id', 'default-tenant'))
+                if last_assistant_msg:
+                    content = last_assistant_msg.get("content")
+                    if content:
+                        # Content can be list of ContentBlock objects or dicts
+                        blocks = content if isinstance(content, list) else [content]
+                        for block in blocks:
+                            # Handle both dict and Anthropic SDK ContentBlock objects
+                            block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+                            if block_type == "tool_use":
+                                tool_name = block.get("name", "") if isinstance(block, dict) else getattr(block, "name", "")
+                                if tool_name and tool_name in approved_tools:
+                                    logger.info(f"Resuming with approved tool: {tool_name}")
+                                    # Execute the approved tool directly
+                                    tool_use_id = block.get("id") if isinstance(block, dict) else getattr(block, "id", "")
+                                    tool_input = block.get("input", {}) if isinstance(block, dict) else getattr(block, "input", {})
+                                    tool_execution_client = ToolExecutionClient(context.get('agent_id', 'unknown'), context.get('tenant_id', 'default-tenant'))
 
-                                try:
-                                    result_str = await tool_execution_client.invoke_direct_tool(
-                                        tool_name, "1.0.0", tool_input, mutating=True
-                                    )
-                                    result = json.loads(result_str) if result_str.startswith("{") else result_str
-                                    logger.info(f"Tool executed: {tool_name}")
-                                except Exception as e:
-                                    logger.error(f"Tool invocation failed: {e}")
-                                    result = {"error": str(e)}
+                                    try:
+                                        result_str = await tool_execution_client.invoke_direct_tool(
+                                            tool_name, "1.0.0", tool_input, mutating=True
+                                        )
+                                        result = json.loads(result_str) if result_str.startswith("{") else result_str
+                                        logger.info(f"Tool executed: {tool_name}")
+                                    except Exception as e:
+                                        logger.error(f"Tool invocation failed: {e}")
+                                        result = {"error": str(e)}
 
-                                # Add tool result to messages
-                                messages.append({
-                                    "role": "user",
-                                    "content": [
-                                        {
-                                            "type": "tool_result",
-                                            "tool_use_id": tool_use_id,
-                                            "content": str(result),
-                                        }
-                                    ],
-                                })
-                                # Clear approved_tools for next iteration
-                                context["approved_hitl_tools"] = {}
-                                continue
+                                    # Add tool result to messages
+                                    messages.append({
+                                        "role": "user",
+                                        "content": [
+                                            {
+                                                "type": "tool_result",
+                                                "tool_use_id": tool_use_id,
+                                                "content": str(result),
+                                            }
+                                        ],
+                                    })
+                                    # Clear approved_tools for next iteration
+                                    context["approved_hitl_tools"] = {}
+                                    continue
 
             # Call Anthropic API
             response = await client.messages.create(
