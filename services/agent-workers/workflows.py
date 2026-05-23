@@ -238,10 +238,14 @@ class AgentWorkflow:
                             event["tool_result"] = tc.get("result")
                         self._emit(event)
 
-                # Add message delta if provided by framework
+                # Update messages with the full history from the activity
                 messages_delta = decision.get("messages_delta")
-                if messages_delta and isinstance(messages_delta, list):
-                    messages.extend(messages_delta)
+                if isinstance(messages_delta, list) and messages_delta:
+                    workflow.logger.info(f"[WORKFLOW DEBUG] messages_delta count: {len(messages_delta)}")
+                    messages = messages_delta
+                    workflow.logger.info(f"[WORKFLOW DEBUG] messages updated to: {len(messages)} messages")
+                    for idx, m in enumerate(messages):
+                        workflow.logger.info(f"[WORKFLOW DEBUG]   messages[{idx}]: role={m.get('role') if isinstance(m, dict) else 'unknown'}")
 
             # Check for HITL approval pending
             if decision.get("hitl_pending"):
