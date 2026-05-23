@@ -164,7 +164,7 @@ agents_source = os.environ.get('AGENTS_SOURCE', 'infra/platform/system-agents')
 agent_registry = os.environ.get('AGENT_REGISTRY', 'http://localhost:8088')
 tenant = os.environ.get('TENANT', 'platform-system')
 
-def create_and_activate_agent(agent_id, agent_name, agent_version, system_prompt, model, max_iterations, memory_budget_mb):
+def create_and_activate_agent(agent_id, agent_name, agent_version, system_prompt, model, max_iterations, memory_budget_mb, framework=None):
     """Create and activate an agent via the registry API"""
 
     # Create agent
@@ -178,6 +178,8 @@ def create_and_activate_agent(agent_id, agent_name, agent_version, system_prompt
         "memory_budget_mb": memory_budget_mb,
         "skills": []
     }
+    if framework:
+        create_payload["framework"] = framework
 
     print(f"\nCreating agent: {agent_name} ({agent_id})")
 
@@ -257,8 +259,9 @@ for yaml_file in yaml_files:
             model = agent_data.get('model', 'claude-sonnet-4-6')
             max_iterations = agent_data.get('max_iterations', 10)
             memory_budget_mb = agent_data.get('memory_budget_mb', 128)
+            framework = agent_data.get('framework', 'pydantic-ai')
 
-            if create_and_activate_agent(agent_id, agent_name, agent_version, system_prompt, model, max_iterations, memory_budget_mb):
+            if create_and_activate_agent(agent_id, agent_name, agent_version, system_prompt, model, max_iterations, memory_budget_mb, framework):
                 agents_seeded += 1
 
     except Exception as e:

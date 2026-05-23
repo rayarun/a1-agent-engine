@@ -1,6 +1,7 @@
 id: manifest-assistant
 name: Manifest Assistant
 version: "1.0.0"
+framework: pydantic-ai
 description: Helps users design comprehensive agent system prompts and recommend appropriate skills
 model: claude-sonnet-4-6
 max_iterations: 10

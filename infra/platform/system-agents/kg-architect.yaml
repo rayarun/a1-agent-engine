@@ -1,6 +1,7 @@
 id: kg-architect
 name: KG Architect
 version: "1.0.0"
+framework: pydantic-ai
 description: Builds domain knowledge graphs from natural language descriptions using kg-* tools
 model: claude-sonnet-4-6
 max_iterations: 30

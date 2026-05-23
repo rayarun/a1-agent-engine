@@ -47,16 +47,15 @@ import {
 const agentSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
-  version: z.string().regex(/^\d+\.\d+\.\d+$/),
+  version: z.string().regex(/^d+.d+.d+$/),
   system_prompt: z.string().min(10, "System prompt too short"),
   model: z.string().min(1),
+  framework: z.enum(["pydantic-ai", "anthropic-agents", "google-adk", "openai-agents"]).optional().default("pydantic-ai"),
   max_iterations: z.number().int().min(1).max(100),
   memory_budget_mb: z.number().int().min(64),
   skills: z.array(z.object({ name: z.string().min(1), version: z.string().min(1) })),
   tools: z.array(z.object({ name: z.string().min(1), version: z.string().min(1) })).optional(),
-});
-
-type AgentForm = z.infer<typeof agentSchema>;
+});type AgentForm = z.infer<typeof agentSchema>;
 
 const FALLBACK_MODELS = [
   { id: "claude-opus-4-7", name: "Claude Opus 4.7" },
@@ -80,6 +79,7 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
     resolver: zodResolver(agentSchema),
     defaultValues: {
       model: "claude-opus-4-7",
+      framework: "pydantic-ai",
       max_iterations: 20,
       memory_budget_mb: 256,
       version: "1.0.0",
@@ -203,6 +203,26 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Max Iterations</Label>
+            <div class="flex flex-col gap-1.5">
+              <Label>Framework</Label>
+              <Controller
+                name="framework"
+                control={control}
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select framework" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pydantic-ai">PydanticAI</SelectItem>
+                      <SelectItem value="anthropic-agents">Anthropic Agents</SelectItem>
+                      <SelectItem value="google-adk">Google ADK</SelectItem>
+                      <SelectItem value="openai-agents">OpenAI Agents</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </div>
               <Input type="number" {...register("max_iterations", { valueAsNumber: true })} />
             </div>
             <div className="flex flex-col gap-1.5">

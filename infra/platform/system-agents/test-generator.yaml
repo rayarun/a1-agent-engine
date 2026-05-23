@@ -1,6 +1,7 @@
 id: test-generator
 name: Test Generator
 version: "1.0.0"
+framework: pydantic-ai
 description: Generates comprehensive test suites for code including unit, integration, and E2E tests
 model: claude-sonnet-4-6
 max_iterations: 10

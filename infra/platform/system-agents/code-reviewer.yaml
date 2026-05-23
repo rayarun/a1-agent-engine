@@ -1,6 +1,7 @@
 id: code-reviewer
 name: Code Reviewer
 version: "1.0.0"
+framework: pydantic-ai
 description: Reviews code for quality, security, performance, and best practices
 model: claude-sonnet-4-6
 max_iterations: 12

@@ -1,6 +1,7 @@
 id: diagnostic-agent
 name: System Diagnostic Agent
 version: "1.0.0"
+framework: pydantic-ai
 description: Collects comprehensive system diagnostics - OS info, service health, logs, and metrics
 model: claude-sonnet-4-6
 max_iterations: 15

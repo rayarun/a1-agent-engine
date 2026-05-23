@@ -1,6 +1,7 @@
 id: log-analyzer
 name: Log Analyzer Agent
 version: "1.0.0"
+framework: pydantic-ai
 description: Analyzes logs for errors, warnings, anomalies - identifies patterns and root causes
 model: claude-sonnet-4-6
 max_iterations: 15

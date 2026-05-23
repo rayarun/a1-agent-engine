@@ -1,6 +1,7 @@
 id: documentation-generator
 name: Documentation Generator
 version: "1.0.0"
+framework: pydantic-ai
 description: Generates comprehensive API documentation, guides, and specifications from code and requirements
 model: claude-sonnet-4-6
 max_iterations: 8
