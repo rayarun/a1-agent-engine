@@ -23,7 +23,7 @@ Temporal activity with durable retry semantics at the activity boundary.
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Optional
 
 import anthropic
 from platform_tool_bridge import ToolExecutionClient
@@ -31,7 +31,7 @@ from platform_tool_bridge import ToolExecutionClient
 logger = logging.getLogger(__name__)
 
 
-async def build_anthropic_agent_and_run(context: dict) -> dict:
+async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] = None) -> dict:
     """
     Build and run an Anthropic Agent SDK agent.
 
@@ -40,6 +40,7 @@ async def build_anthropic_agent_and_run(context: dict) -> dict:
 
     Args:
         context: Agent context (id, tenant, prompt, model, system_prompt, skills, tools)
+        messages: Existing message history (for HITL resumption). If None, starts fresh with prompt.
 
     Returns:
         AgentDecision dict compatible with AgentWorkflow expectations
@@ -61,8 +62,10 @@ async def build_anthropic_agent_and_run(context: dict) -> dict:
     # Build tool definitions from platform tools
     tool_definitions = _build_tool_definitions(context)
 
-    # Initialize message history with user prompt
-    messages = [{"role": "user", "content": context.get('prompt', 'Help me')}]
+    # Initialize or resume message history
+    if messages is None or len(messages) == 0:
+        messages = [{"role": "user", "content": context.get('prompt', 'Help me')}]
+
     tokens_in = 0
     tokens_out = 0
 

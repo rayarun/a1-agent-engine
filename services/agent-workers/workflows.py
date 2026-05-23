@@ -164,7 +164,7 @@ class AgentWorkflow:
                 # Anthropic Agent SDK approach (activity-contained manual ReAct loop)
                 decision = await workflow.execute_activity(
                     "anthropic_agents_run",
-                    args=[agent_context],
+                    args=[agent_context, messages],
                     start_to_close_timeout=timedelta(seconds=300),
                     retry_policy=RetryPolicy(maximum_attempts=2),
                 )
