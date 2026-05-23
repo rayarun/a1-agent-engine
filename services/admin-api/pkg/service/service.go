@@ -2217,13 +2217,8 @@ func (h *AdminHandler) HandleListModelRoutes(w http.ResponseWriter, r *http.Requ
 			http.Error(w, "Failed to parse model routes", http.StatusInternalServerError)
 			return
 		}
-		if apiKey != nil {
-			route.APIKey = *apiKey
-		}
-		if description != nil {
-			route.Description = *description
-		}
-		route.APIKey = "" // Never return the key
+		route.Description = description
+		route.APIKey = nil // Never return the key
 		routes = append(routes, route)
 	}
 
@@ -2288,6 +2283,10 @@ func (h *AdminHandler) HandleCreateModelRoute(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	var desc *string
+	if req.Description != "" {
+		desc = &req.Description
+	}
 	route := models.ModelRoute{
 		ID:           id,
 		TenantID:     tenantID,
@@ -2295,7 +2294,7 @@ func (h *AdminHandler) HandleCreateModelRoute(w http.ResponseWriter, r *http.Req
 		EndpointURL:  req.EndpointURL,
 		ProviderType: req.ProviderType,
 		Status:       "active",
-		Description:  req.Description,
+		Description:  desc,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -2405,7 +2404,7 @@ func (h *AdminHandler) HandleUpdateModelRoute(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	route.APIKey = "" // Never return the key
+	route.APIKey = nil // Never return the key
 
 	// Regenerate LiteLLM config after route update
 	if err := h.GenerateLiteLLMConfig(r.Context()); err != nil {

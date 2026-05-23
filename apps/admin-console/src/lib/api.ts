@@ -501,7 +501,10 @@ export const adminApi = {
   // Model Routes Management
   async listModelRoutes(): Promise<any> {
     const response = await request("GET", "/api/v1/admin/model-routes");
-    if (!response.ok) throw new Error("Failed to fetch model routes");
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to fetch model routes: ${errorText}`);
+    }
     return response.json();
   },
 
@@ -513,7 +516,10 @@ export const adminApi = {
     description?: string;
   }): Promise<any> {
     const response = await request("POST", "/api/v1/admin/model-routes", data);
-    if (!response.ok) throw new Error("Failed to create model route");
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to create model route: ${errorText}`);
+    }
     return response.json();
   },
 
@@ -526,13 +532,19 @@ export const adminApi = {
     description: string;
   }>): Promise<any> {
     const response = await request("PUT", `/api/v1/admin/model-routes/${id}`, data);
-    if (!response.ok) throw new Error("Failed to update model route");
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to update model route: ${errorText}`);
+    }
     return response.json();
   },
 
   async deleteModelRoute(id: string): Promise<any> {
     const response = await request("DELETE", `/api/v1/admin/model-routes/${id}`);
-    if (!response.ok) throw new Error("Failed to delete model route");
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to delete model route: ${errorText}`);
+    }
     return response.json();
   },
 

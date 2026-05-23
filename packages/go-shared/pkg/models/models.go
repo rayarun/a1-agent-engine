@@ -442,10 +442,10 @@ type ModelRoute struct {
 	TenantID     string    `json:"tenant_id"`
 	ModelPattern string    `json:"model_pattern"` // e.g., "claude-*", "gpt-*", "gemma:*"
 	EndpointURL  string    `json:"endpoint_url"`
-	APIKey       string    `json:"api_key,omitempty"` // optional
+	APIKey       *string   `json:"api_key,omitempty"` // optional, nullable
 	ProviderType string    `json:"provider_type"`     // anthropic, openai, google, ollama, custom
 	Status       string    `json:"status"`            // active, inactive
-	Description  string    `json:"description,omitempty"`
+	Description  *string   `json:"description,omitempty"` // optional, nullable
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
