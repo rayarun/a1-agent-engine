@@ -298,10 +298,8 @@ class AgentWorkflow:
 
                 if self._hitl_decision == "approved":
                     agent_context["approved_hitl_tools"] = {h_tool_name: approval_id}
-                    messages.append({
-                        "role": "user",
-                        "content": f"Tool '{h_tool_name}' has been approved. Please proceed with executing it.",
-                    })
+                    # Don't append approval message to messages - the activity handles execution internally
+                    # Adding a user message here creates consecutive user messages, breaking Anthropic API format
                     continue_loop = True
                     final_answer = None
                 else:
