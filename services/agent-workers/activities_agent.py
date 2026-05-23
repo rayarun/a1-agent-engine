@@ -436,7 +436,7 @@ async def pydantic_ai_reasoning_step(
 
 
 @activity.defn
-async def anthropic_agents_run(agent_context):
+async def anthropic_agents_run(agent_context, messages=None):
     """
     Anthropic Agent SDK execution activity.
 
@@ -446,6 +446,7 @@ async def anthropic_agents_run(agent_context):
 
     Args:
         agent_context: Agent context with agent_id, tenant_id, model, system_prompt, tools, etc.
+        messages: Optional existing message history for HITL resumption.
 
     Returns:
         AgentDecision dict with final_answer, tool_calls, messages_delta, hitl_pending, tokens, etc.
@@ -453,7 +454,7 @@ async def anthropic_agents_run(agent_context):
     from anthropic_agent import build_anthropic_agent_and_run
 
     logging.info(f"Starting anthropic_agents_run for agent {agent_context.get('agent_id')}")
-    return await build_anthropic_agent_and_run(agent_context)
+    return await build_anthropic_agent_and_run(agent_context, messages)
 
 
 @activity.defn
