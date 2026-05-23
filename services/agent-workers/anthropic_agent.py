@@ -151,22 +151,38 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
                                                 }
                                             ],
                                         })
-                                        # Clear approved_tools for next iteration
+                                        # Clear approved_tools and return - don't continue to model call
                                         context["approved_hitl_tools"] = {}
-                                        logger.info("[DEBUG] Cleared approved_hitl_tools, skipping model call")
-                                        break
+                                        logger.info("[DEBUG] Approved tool executed, returning to workflow with tool result")
+                                        return {
+                                            "final_answer": None,
+                                            "tool_calls": [],
+                                            "messages_delta": messages,
+                                            "continue_loop": True,
+                                            "hitl_pending": False,
+                                            "tokens_in": tokens_in,
+                                            "tokens_out": tokens_out,
+                                        }
 
-                    # If we found and executed an approved tool, skip model call
+                    # If we found and executed an approved tool, should have returned above
                     if found_approved:
-                        logger.info("[DEBUG] CONTINUING to next iteration (skipping model call)")
+                        logger.info("[DEBUG] Approved tool was marked found but return didn't execute - breaking")
                         break
             else:
                 logger.info(f"[DEBUG] No approved tools or no messages. approved_tools={bool(approved_tools)}, messages={len(messages) if messages else 0}")
 
-            # Skip model call if approved tool was executed
+            # If we broke due to approved tool, don't call model
             if found_approved:
-                logger.info("[DEBUG] Approved tool executed, skipping model call")
-                continue
+                logger.info("[DEBUG] Approved tool executed in iteration, returning")
+                return {
+                    "final_answer": None,
+                    "tool_calls": [],
+                    "messages_delta": messages,
+                    "continue_loop": True,
+                    "hitl_pending": False,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                }
 
             # Call Anthropic API
             response = await client.messages.create(
