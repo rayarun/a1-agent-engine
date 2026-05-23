@@ -433,3 +433,31 @@ async def pydantic_ai_reasoning_step(
             "continue_loop": False,
             "error": str(e),
         }
+
+
+@activity.defn
+async def invoke_platform_tool(
+    tool_name: str, tool_version: str, args: dict, tenant_id: str, agent_id: str, mutating: bool
+) -> str:
+    """
+    Generic platform tool invocation activity.
+
+    Used by Google ADK and OpenAI Agents frameworks to invoke tools via the platform's
+    Skill Dispatcher. Routes through the same HITL/audit/cost pipeline as other frameworks.
+
+    Args:
+        tool_name: Name of the tool (e.g., "kg-search", "bash")
+        tool_version: Tool version (e.g., "1.0.0")
+        args: Tool arguments dict
+        tenant_id: Tenant context for RLS
+        agent_id: Agent using the tool
+        mutating: Whether tool modifies state (HITL check point)
+
+    Returns:
+        JSON string of result or __HITL_PENDING__ marker if approval required
+    """
+    from platform_tool_bridge import ToolExecutionClient
+
+    logging.info(f"invoke_platform_tool: {tool_name} v{tool_version}, mutating={mutating}")
+    client = ToolExecutionClient(agent_id, tenant_id)
+    return await client.invoke_direct_tool(tool_name, tool_version, args, mutating)

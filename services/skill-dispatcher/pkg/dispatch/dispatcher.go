@@ -385,6 +385,12 @@ func (r *ToolExecutorRouter) Route(ctx context.Context, tool models.ToolRef, arg
 		return r.executeKG(ctx, tool, args)
 	}
 
+	// Route fw-* (native framework) tools to sandbox-manager
+	if len(tool.Name) > 3 && tool.Name[:3] == "fw-" {
+		log.Printf("[Route] Routing fw-* native tool to sandbox-manager")
+		return r.executeSandbox(ctx, tool, args)
+	}
+
 	// Route other tools to sandbox-manager
 	log.Printf("[Route] Routing to sandbox-manager")
 	return r.executeSandbox(ctx, tool, args)
