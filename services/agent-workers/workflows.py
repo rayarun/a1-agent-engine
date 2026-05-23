@@ -305,6 +305,12 @@ class AgentWorkflow:
                 else:
                     final_answer = f"Execution of '{h_tool_name}' was denied by the operator."
                     break
+            else:
+                # Clear approved_hitl_tools once HITL is no longer pending
+                # This prevents re-execution of the same approved tool on subsequent iterations
+                if agent_context.get("approved_hitl_tools"):
+                    workflow.logger.info("[HITL WORKFLOW] Clearing approved_hitl_tools after execution")
+                    agent_context["approved_hitl_tools"] = {}
 
             # Check if we should stop
             if final_answer or not continue_loop:
