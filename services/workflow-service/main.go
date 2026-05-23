@@ -16,8 +16,10 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -135,6 +137,58 @@ func (s *Service) RegisterWorkflow(c *gin.Context) {
 		}
 	}
 
+	// Marshal JSON fields (convert to string for pq driver compatibility)
+	var definitionStr interface{} = nil
+	if req.Definition != nil {
+		definitionBytes, err := json.Marshal(req.Definition)
+		if err != nil {
+			s.logger.Error("Failed to marshal definition", zap.Error(err))
+			c.JSON(400, gin.H{"error": "Invalid definition JSON"})
+			return
+		}
+		definitionStr = string(definitionBytes)
+	}
+
+	var inputSchemaStr interface{} = nil
+	if req.InputSchema != nil {
+		inputSchemaBytes, err := json.Marshal(req.InputSchema)
+		if err != nil {
+			s.logger.Error("Failed to marshal input schema", zap.Error(err))
+			c.JSON(400, gin.H{"error": "Invalid input schema JSON"})
+			return
+		}
+		inputSchemaStr = string(inputSchemaBytes)
+	}
+
+	var triggerConfigStr interface{} = nil
+	if req.TriggerConfig != nil {
+		triggerConfigBytes, err := json.Marshal(req.TriggerConfig)
+		if err != nil {
+			s.logger.Error("Failed to marshal trigger config", zap.Error(err))
+			c.JSON(400, gin.H{"error": "Invalid trigger config JSON"})
+			return
+		}
+		triggerConfigStr = string(triggerConfigBytes)
+	}
+
+	// Begin transaction for RLS context
+	tx, err := s.db.Begin()
+	if err != nil {
+		s.logger.Error("Failed to begin transaction", zap.Error(err))
+		c.JSON(500, gin.H{"error": "Failed to begin transaction"})
+		return
+	}
+	defer tx.Rollback()
+
+	// Set RLS context for tenant isolation (within transaction)
+	escapedTenantID := strings.ReplaceAll(tenantID, "'", "''")
+	setLocalQuery := fmt.Sprintf("SET LOCAL app.tenant_id = '%s'", escapedTenantID)
+	if _, err := tx.Exec(setLocalQuery); err != nil {
+		s.logger.Error("Failed to set tenant context", zap.Error(err))
+		c.JSON(500, gin.H{"error": "Failed to set tenant context"})
+		return
+	}
+
 	// Store in database
 	query := `
 		INSERT INTO workflow_registrations
@@ -146,13 +200,20 @@ func (s *Service) RegisterWorkflow(c *gin.Context) {
 	var id, returnedTenantID string
 	var createdAt interface{}
 
-	err := s.db.QueryRow(query,
+	err = tx.QueryRow(query,
 		req.ID, tenantID, req.Name, req.Description, req.WorkflowType, req.WorkflowClass, req.TaskQueue,
-		req.Definition, req.InputSchema, req.TriggerConfig).Scan(&id, &returnedTenantID, &createdAt)
+		definitionStr, inputSchemaStr, triggerConfigStr).Scan(&id, &returnedTenantID, &createdAt)
 
 	if err != nil {
 		s.logger.Error("Failed to register workflow", zap.Error(err))
 		c.JSON(500, gin.H{"error": "Failed to register workflow"})
+		return
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		s.logger.Error("Failed to commit transaction", zap.Error(err))
+		c.JSON(500, gin.H{"error": "Failed to commit transaction"})
 		return
 	}
 
@@ -281,8 +342,35 @@ func (s *Service) TriggerWorkflow(c *gin.Context) {
 
 	inputs := triggerReq["inputs"].(map[string]interface{})
 
+	// Marshal inputs to JSON
+	inputsJSON, err := json.Marshal(inputs)
+	if err != nil {
+		s.logger.Error("Failed to marshal inputs", zap.Error(err))
+		c.JSON(400, gin.H{"error": "Invalid inputs JSON"})
+		return
+	}
+	inputsStr := string(inputsJSON)
+
 	// Generate run ID
 	runID := uuid.New().String()
+
+	// Begin transaction for RLS context
+	tx, err := s.db.Begin()
+	if err != nil {
+		s.logger.Error("Failed to begin transaction", zap.Error(err))
+		c.JSON(500, gin.H{"error": "Failed to begin transaction"})
+		return
+	}
+	defer tx.Rollback()
+
+	// Set RLS context for tenant isolation
+	escapedTenantID := strings.ReplaceAll(tenantID, "'", "''")
+	setLocalQuery := fmt.Sprintf("SET LOCAL app.tenant_id = '%s'", escapedTenantID)
+	if _, err := tx.Exec(setLocalQuery); err != nil {
+		s.logger.Error("Failed to set tenant context", zap.Error(err))
+		c.JSON(500, gin.H{"error": "Failed to set tenant context"})
+		return
+	}
 
 	// Create workflow run record
 	query := `
@@ -293,12 +381,28 @@ func (s *Service) TriggerWorkflow(c *gin.Context) {
 	`
 
 	var returnedRunID, status string
-	err := s.db.QueryRow(query, runID, workflowID, tenantID, inputs).Scan(&returnedRunID, &status)
+	err = tx.QueryRow(query, runID, workflowID, tenantID, inputsStr).Scan(&returnedRunID, &status)
 
 	if err != nil {
 		s.logger.Error("Failed to create workflow run", zap.Error(err))
 		c.JSON(500, gin.H{"error": "Failed to trigger workflow"})
 		return
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		s.logger.Error("Failed to commit transaction", zap.Error(err))
+		c.JSON(500, gin.H{"error": "Failed to commit transaction"})
+		return
+	}
+
+	// Fetch workflow definition and dispatch to Temporal (async)
+	workflow, err := s.getWorkflow(workflowID, tenantID)
+	if err != nil {
+		s.logger.Error("Failed to fetch workflow for dispatch", zap.Error(err))
+		// Still return success since the run was created - dispatch just won't happen
+	} else {
+		go s.dispatchWorkflowRun(workflow, runID, inputs, tenantID)
 	}
 
 	c.JSON(201, gin.H{

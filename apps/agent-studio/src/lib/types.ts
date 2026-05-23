@@ -97,7 +97,7 @@ export interface AgentManifest {
   max_iterations: number;
   memory_budget_mb: number;
   mcp_servers?: string[];
-  framework?: AgentFramework;
+  framework: AgentFramework;
   native_tools?: Record<string, unknown>;
 }
 
@@ -113,7 +113,7 @@ export interface AgentRecord {
   max_iterations: number;
   memory_budget_mb: number;
   mcp_servers?: string[];
-  framework?: AgentFramework;
+  framework: AgentFramework;
   native_tools?: Record<string, unknown>;
   status: ResourceStatus;
   created_at: string;

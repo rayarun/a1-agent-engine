@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
@@ -22,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 
 	"github.com/gin-gonic/gin"
@@ -186,13 +188,53 @@ type WorkflowRegistration struct {
 
 // dispatchWorkflowRun sends a workflow to Temporal for execution
 func (s *Service) dispatchWorkflowRun(w *WorkflowRegistration, runID string, inputs map[string]interface{}, tenantID string) {
-	// TODO: Implement Temporal client dispatch
-	// This would:
-	// 1. Connect to Temporal client
-	// 2. Call StartWorkflowOptions with the workflow type
-	// 3. Pass the workflow definition + inputs as parameters
-	// 4. Update workflow_runs table with temporal_workflow_id, temporal_run_id
-	// 5. Set status to 'running'
+	// Call workflow-initiator service to start the workflow
+	workflowInitiatorURL := os.Getenv("WORKFLOW_INITIATOR_URL")
+	if workflowInitiatorURL == "" {
+		workflowInitiatorURL = "http://localhost:8081"
+	}
+
+	payload := map[string]interface{}{
+		"workflow_id":    w.ID,
+		"run_id":         runID,
+		"task_queue":     w.TaskQueue,
+		"definition":     w.Definition,
+		"inputs":         inputs,
+		"tenant_id":      tenantID,
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		s.logger.Error("Failed to marshal dispatch payload", zap.Error(err))
+		return
+	}
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/workflows/%s/start", workflowInitiatorURL, w.ID),
+		bytes.NewReader(payloadBytes))
+	if err != nil {
+		s.logger.Error("Failed to create dispatch request", zap.Error(err))
+		return
+	}
+
+	req.Header.Set("X-Tenant-ID", tenantID)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		s.logger.Error("Failed to dispatch to workflow-initiator", zap.Error(err))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		s.logger.Error("Workflow-initiator returned error",
+			zap.Int("status_code", resp.StatusCode),
+			zap.String("workflow_id", w.ID),
+			zap.String("run_id", runID),
+		)
+		return
+	}
 
 	s.logger.Info("Workflow run dispatched to Temporal",
 		zap.String("workflow_id", w.ID),

@@ -45,7 +45,7 @@ async def build_anthropic_agent_and_run(context: AgentContext) -> dict:
     Returns:
         AgentDecision dict compatible with AgentWorkflow expectations
     """
-    logger.info(f"Building Anthropic agent {context.agent_id}")
+    logger.info(f"Building Anthropic agent {context.get('agent_id', 'unknown')}")
 
     # Set up client to use LiteLLM gateway
     litellm_base_url = os.getenv("LITELLM_BASE_URL", "http://localhost:8000/v1")
@@ -55,7 +55,7 @@ async def build_anthropic_agent_and_run(context: AgentContext) -> dict:
     )
 
     # Normalize model string: claude-sonnet-4-6 → claude-sonnet-4-6 (already correct)
-    model = context.model
+    model = context.get('model', 'claude-haiku-4-5')
 
     # Build tool definitions from platform tools
     tool_definitions = _build_tool_definitions(context)
@@ -66,15 +66,15 @@ async def build_anthropic_agent_and_run(context: AgentContext) -> dict:
     tokens_out = 0
 
     # Multi-turn ReAct loop
-    for iteration in range(context.max_iterations):
-        logger.info(f"Iteration {iteration + 1}/{context.max_iterations}")
+    for iteration in range(context.get('max_iterations', 5)):
+        logger.info(f"Iteration {iteration + 1}/{context.get('max_iterations', 5)}")
 
         try:
             # Call Anthropic API
             response = await client.messages.create(
                 model=model,
                 max_tokens=8192,
-                system=context.system_prompt,
+                system=context.get('system_prompt', ''),
                 tools=tool_definitions,
                 messages=messages,
             )
@@ -112,7 +112,7 @@ async def build_anthropic_agent_and_run(context: AgentContext) -> dict:
 
                 # Process each tool_use block
                 tool_results = []
-                tool_execution_client = ToolExecutionClient(context.agent_id, context.tenant_id)
+                tool_execution_client = ToolExecutionClient(context.get('agent_id', 'unknown'), context.get('tenant_id', 'default-tenant'))
                 hitl_pending = False
                 hitl_approval_id = None
                 hitl_tool_name = None
@@ -207,7 +207,7 @@ def _build_tool_definitions(context: AgentContext) -> list[dict]:
     tools = []
 
     # Add platform tools (system + manifest-specified + skills)
-    all_tools = list(context.system_tools) + list(context.tools)
+    all_tools = list(context.get('system_tools', [])) + list(context.get('tools', []))
 
     for tool_def in all_tools:
         tool_name = tool_def.get("name", "").replace("-", "_").replace(".", "_")

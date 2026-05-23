@@ -59,7 +59,7 @@ export default function WorkflowRunPage() {
     queryKey: ["workflow-run", runId, tenantId],
     queryFn: async () => {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/workflow-runs/${runId}`,
+        `${process.env.NEXT_PUBLIC_API_GATEWAY_URL}/api/v1/workflow-runs/${runId}`,
         {
           headers: { "X-Tenant-ID": tenantId },
         }

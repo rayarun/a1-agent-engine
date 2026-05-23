@@ -73,7 +73,7 @@ export default function WorkflowRunsPage() {
     queryKey: ["workflow-runs", workflowId, tenantId],
     queryFn: async () => {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/workflows/${workflowId}/runs`,
+        `${process.env.NEXT_PUBLIC_API_GATEWAY_URL}/api/v1/workflows/${workflowId}/runs`,
         {
           headers: { "X-Tenant-ID": tenantId },
         }
@@ -89,7 +89,7 @@ export default function WorkflowRunsPage() {
   const triggerMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/workflows/${workflowId}/trigger`,
+        `${process.env.NEXT_PUBLIC_API_GATEWAY_URL}/api/v1/workflows/${workflowId}/trigger`,
         {
           method: "POST",
           headers: {

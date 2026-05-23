@@ -88,7 +88,7 @@ export default function NewWorkflowPage() {
         }
       }
 
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/workflows`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_GATEWAY_URL}/api/v1/workflows`, {
         method: "POST",
         headers: {
           "X-Tenant-ID": tenantId,
@@ -106,8 +106,20 @@ export default function NewWorkflowPage() {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to create workflow");
+        const contentType = response.headers.get("content-type") || "";
+        let errorMsg = "Failed to create workflow";
+
+        if (contentType.includes("application/json")) {
+          try {
+            const error = await response.json();
+            errorMsg = error.error || errorMsg;
+          } catch {
+            errorMsg = `API error: ${response.status} ${response.statusText}`;
+          }
+        } else {
+          errorMsg = `API error: ${response.status} ${response.statusText}`;
+        }
+        throw new Error(errorMsg);
       }
 
       return await response.json();

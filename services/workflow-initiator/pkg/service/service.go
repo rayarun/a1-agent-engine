@@ -182,7 +182,7 @@ func HandleStartSession(w http.ResponseWriter, r *http.Request) {
 		var manifestMap map[string]interface{}
 		json.Unmarshal(manifestBytes, &manifestMap)
 		reqMap["manifest"] = manifestMap
-		log.Printf("[INITIATOR] Passing manifest to Temporal: model=%s, keys=%d", req.Manifest.Model, len(manifestMap))
+		log.Printf("[INITIATOR] Passing manifest to Temporal: model=%s, framework=%s, keys=%d", req.Manifest.Model, req.Manifest.Framework, len(manifestMap))
 	}
 
 	dispatchStart := time.Now()
@@ -404,8 +404,8 @@ func fetchManifest(ctx context.Context, agentID, tenantID string) *models.AgentM
 		return nil
 	}
 
-	log.Printf("[FETCH_MANIFEST] Successfully fetched: model=%s, system_prompt_len=%d, max_iterations=%d",
-		manifest.Model, len(manifest.SystemPrompt), manifest.MaxIterations)
+	log.Printf("[FETCH_MANIFEST] Successfully fetched: model=%s, framework=%s, system_prompt_len=%d, max_iterations=%d",
+		manifest.Model, manifest.Framework, len(manifest.SystemPrompt), manifest.MaxIterations)
 
 	// Store in cache with TTL
 	manifestStore.Store(cacheKey, cachedManifest{

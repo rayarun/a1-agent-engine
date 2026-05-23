@@ -50,7 +50,7 @@ const agentSchema = z.object({
   version: z.string().regex(/^d+.d+.d+$/),
   system_prompt: z.string().min(10, "System prompt too short"),
   model: z.string().min(1),
-  framework: z.enum(["pydantic-ai", "anthropic-agents", "google-adk", "openai-agents"]).optional().default("pydantic-ai"),
+  framework: z.enum(["pydantic-ai", "anthropic-agents", "google-adk", "openai-agents"]).default("pydantic-ai"),
   max_iterations: z.number().int().min(1).max(100),
   memory_budget_mb: z.number().int().min(64),
   skills: z.array(z.object({ name: z.string().min(1), version: z.string().min(1) })),
