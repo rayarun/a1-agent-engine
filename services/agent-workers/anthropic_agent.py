@@ -80,34 +80,64 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
         try:
             # Check if resuming with an approved tool that needs execution
             approved_tools = context.get('approved_hitl_tools', {})
+            logger.info(f"[DEBUG] approved_hitl_tools in context: {approved_tools}")
+            logger.info(f"[DEBUG] messages count: {len(messages)}")
+
+            found_approved = False
             if approved_tools and messages:
-                logger.info(f"[APPROVED TOOLS CHECK] Looking for approved tools: {list(approved_tools.keys())}")
-                # Search through all assistant messages for tool_use blocks matching approved tools
-                for msg in messages:
-                    if msg.get("role") == "assistant":
+                logger.info(f"[DEBUG] Approved tools present: {list(approved_tools.keys())}")
+
+                for msg_idx, msg in enumerate(messages):
+                    msg_role = msg.get("role")
+                    logger.info(f"[DEBUG] Message {msg_idx}: role={msg_role}, type={type(msg)}")
+
+                    if msg_role == "assistant":
+                        logger.info(f"[DEBUG]   Found assistant message at index {msg_idx}")
                         content = msg.get("content")
+                        logger.info(f"[DEBUG]   Content type: {type(content)}, is_list: {isinstance(content, list)}")
+
                         if content:
                             blocks = content if isinstance(content, list) else [content]
-                            for block in blocks:
+                            logger.info(f"[DEBUG]   Blocks count: {len(blocks)}")
+
+                            for block_idx, block in enumerate(blocks):
+                                logger.info(f"[DEBUG]     Block {block_idx}: type={type(block)}")
+
                                 # Handle both dict and Anthropic SDK ContentBlock objects
-                                block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+                                if isinstance(block, dict):
+                                    block_type = block.get("type")
+                                    block_name = block.get("name")
+                                    logger.info(f"[DEBUG]       Dict block: type={block_type}, name={block_name}")
+                                else:
+                                    block_type = getattr(block, "type", None)
+                                    block_name = getattr(block, "name", None)
+                                    logger.info(f"[DEBUG]       SDK block: type={block_type}, name={block_name}")
+
                                 if block_type == "tool_use":
-                                    tool_name = block.get("name", "") if isinstance(block, dict) else getattr(block, "name", "")
-                                    if tool_name in approved_tools:
-                                        logger.info(f"[APPROVED TOOL FOUND] Executing approved tool: {tool_name}")
+                                    logger.info(f"[DEBUG]       Found tool_use: {block_name}")
+                                    if block_name in approved_tools:
+                                        logger.info(f"[APPROVED TOOL MATCH] tool={block_name}, id={approved_tools[block_name]}")
+                                        found_approved = True
+
                                         # Execute the approved tool directly
-                                        tool_use_id = block.get("id") if isinstance(block, dict) else getattr(block, "id", "")
-                                        tool_input = block.get("input", {}) if isinstance(block, dict) else getattr(block, "input", {})
+                                        if isinstance(block, dict):
+                                            tool_use_id = block.get("id")
+                                            tool_input = block.get("input", {})
+                                        else:
+                                            tool_use_id = getattr(block, "id", "")
+                                            tool_input = getattr(block, "input", {})
+
+                                        logger.info(f"[DEBUG] Executing tool={block_name}, id={tool_use_id}")
                                         tool_execution_client = ToolExecutionClient(context.get('agent_id', 'unknown'), context.get('tenant_id', 'default-tenant'))
 
                                         try:
                                             result_str = await tool_execution_client.invoke_direct_tool(
-                                                tool_name, "1.0.0", tool_input, mutating=True
+                                                str(block_name), "1.0.0", tool_input, mutating=True
                                             )
                                             result = json.loads(result_str) if result_str.startswith("{") else result_str
-                                            logger.info(f"[APPROVED TOOL EXECUTED] {tool_name}: {str(result)[:100]}")
+                                            logger.info(f"[TOOL RESULT] {block_name}: success")
                                         except Exception as e:
-                                            logger.error(f"[APPROVED TOOL ERROR] Tool invocation failed: {e}")
+                                            logger.error(f"[TOOL ERROR] {block_name}: {e}")
                                             result = {"error": str(e)}
 
                                         # Add tool result to messages
@@ -121,13 +151,22 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
                                                 }
                                             ],
                                         })
-                                        # Clear approved_tools and continue loop
+                                        # Clear approved_tools for next iteration
                                         context["approved_hitl_tools"] = {}
-                                        logger.info("[APPROVED TOOL DONE] Cleared approved_tools, continuing loop")
+                                        logger.info("[DEBUG] Cleared approved_hitl_tools, skipping model call")
                                         break
-                        # After finding and executing, skip the model call
-                        if not context.get("approved_hitl_tools"):
-                            continue
+
+                    # If we found and executed an approved tool, skip model call
+                    if found_approved:
+                        logger.info("[DEBUG] CONTINUING to next iteration (skipping model call)")
+                        break
+            else:
+                logger.info(f"[DEBUG] No approved tools or no messages. approved_tools={bool(approved_tools)}, messages={len(messages) if messages else 0}")
+
+            # Skip model call if approved tool was executed
+            if found_approved:
+                logger.info("[DEBUG] Approved tool executed, skipping model call")
+                continue
 
             # Call Anthropic API
             response = await client.messages.create(
