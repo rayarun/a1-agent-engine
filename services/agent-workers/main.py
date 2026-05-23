@@ -57,7 +57,7 @@ async def main():
 
     # Configuration
     temporal_host = os.getenv("TEMPORAL_HOSTPORT", "localhost:7233")
-    task_queue = os.getenv("TEMPORAL_TASK_QUEUE", "agent-task-queue")
+    task_queue = os.getenv("TEMPORAL_TASK_QUEUE", "default-tenant-agent-queue")
 
     # Connect to Temporal with retries
     client = None

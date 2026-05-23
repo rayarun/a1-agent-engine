@@ -159,8 +159,8 @@ func HandleStartSession(w http.ResponseWriter, r *http.Request) {
 			req.Manifest.Model, len(req.Manifest.SystemPrompt))
 	}
 
-	// Use default task queue for all workflows (agent-workers only listens on default-tenant-agent-queue)
-	taskQueue := "default-tenant-agent-queue"
+	// Use tenant-specific task queue for proper isolation
+	taskQueue := fmt.Sprintf("%s-agent-queue", req.TenantID)
 
 	workflowOptions := client.StartWorkflowOptions{
 		ID:        fmt.Sprintf("agent-wf-%s-%s", req.AgentID, req.SessionID),

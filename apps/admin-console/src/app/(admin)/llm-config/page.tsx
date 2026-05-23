@@ -14,16 +14,11 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { Loader2, AlertCircle, Save, Eye, EyeOff } from "lucide-react";
+import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { adminApi } from "@/lib/api";
 
 export default function LLMConfigPage() {
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [saveError, setSaveError] = useState("");
-  const [saveSuccess, setSaveSuccess] = useState(false);
-
   const [config, setConfig] = useState({
     mode: "multi-provider",
     anthropic_base_url: "https://api.anthropic.com",
@@ -50,26 +45,6 @@ export default function LLMConfigPage() {
     }
   }, [fetchedConfig]);
 
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      // Config is now managed via Model Routes page instead of a dedicated config endpoint
-      // Show success but note that actual routing is configured there
-      return { success: true };
-    },
-    onSuccess: () => {
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 3000);
-    },
-    onError: (err) => {
-      setSaveError(err instanceof Error ? err.message : "Failed to save configuration");
-    },
-  });
-
-  async function handleSave() {
-    setSaveError("");
-    setSaveSuccess(false);
-    await saveMutation.mutateAsync();
-  }
 
   const modes = [
     { id: "multi-provider", label: "Multi-Provider (Recommended)", description: "liteLLM unified interface: Anthropic, OpenAI, Google, and 100+ providers" },

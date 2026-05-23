@@ -522,6 +522,10 @@ export default function AgentDetailPage({
               <div className="text-xs text-muted-foreground mb-1">Memory Budget</div>
               <div className="font-mono">{agent.memory_budget_mb} MB</div>
             </div>
+            <div className="rounded-lg border border-border bg-card p-3">
+              <div className="text-xs text-muted-foreground mb-1">Framework</div>
+              <div className="font-mono">{agent.framework || 'pydantic-ai'}</div>
+            </div>
           </div>
         </section>
 

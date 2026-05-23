@@ -17,6 +17,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -2492,7 +2493,8 @@ func (h *AdminHandler) GenerateLiteLLMConfig(ctx context.Context) error {
 	var modelList []interface{}
 
 	for rows.Next() {
-		var pattern, endpoint, apiKey, provider, status string
+		var pattern, endpoint, provider, status string
+		var apiKey sql.NullString
 		if err := rows.Scan(&pattern, &endpoint, &apiKey, &provider, &status); err != nil {
 			return err
 		}
@@ -2502,8 +2504,8 @@ func (h *AdminHandler) GenerateLiteLLMConfig(ctx context.Context) error {
 			"api_base": endpoint,
 		}
 
-		if apiKey != "" {
-			params["api_key"] = apiKey
+		if apiKey.Valid && apiKey.String != "" {
+			params["api_key"] = apiKey.String
 		}
 
 		// Map provider type to liteLLM model format: provider/model-name
@@ -2576,7 +2578,8 @@ func (h *AdminHandler) HandleGetLiteLLMConfig(w http.ResponseWriter, r *http.Req
 	var modelList []interface{}
 
 	for rows.Next() {
-		var pattern, endpoint, apiKey, provider, status string
+		var pattern, endpoint, provider, status string
+		var apiKey sql.NullString
 		if err := rows.Scan(&pattern, &endpoint, &apiKey, &provider, &status); err != nil {
 			http.Error(w, "Failed to scan model routes", http.StatusInternalServerError)
 			return
@@ -2586,8 +2589,8 @@ func (h *AdminHandler) HandleGetLiteLLMConfig(w http.ResponseWriter, r *http.Req
 			"api_base": endpoint,
 		}
 
-		if apiKey != "" {
-			params["api_key"] = apiKey
+		if apiKey.Valid && apiKey.String != "" {
+			params["api_key"] = apiKey.String
 		}
 
 		switch provider {

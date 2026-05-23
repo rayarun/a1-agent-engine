@@ -62,6 +62,11 @@ func main() {
 		workflowServiceURL = "http://localhost:8094"
 	}
 
+	agentRegistryURL := os.Getenv("AGENT_REGISTRY_URL")
+	if agentRegistryURL == "" {
+		agentRegistryURL = "http://localhost:8088"
+	}
+
 	hmacSecret := []byte(os.Getenv("WEBHOOK_HMAC_SECRET"))
 	if len(hmacSecret) == 0 {
 		hmacSecret = []byte("dev-secret")
@@ -76,6 +81,7 @@ func main() {
 	h := &service.GatewayHandler{
 		InitiatorURL:        initiatorURL,
 		WorkflowServiceURL:  workflowServiceURL,
+		AgentRegistryURL:    agentRegistryURL,
 		IdempotencyStore:    store,
 	}
 
@@ -87,6 +93,12 @@ func main() {
 	mux.HandleFunc("GET /api/v1/agents/{id}/chat", h.HandleChatStream)
 	mux.HandleFunc("POST /api/v1/agents/{id}/chat", h.HandleChatStream)
 	mux.HandleFunc("GET /api/v1/agents/{id}/ws", h.HandleChatWS)
+	// Agent Registry proxy routes (must come after specific routes like /chat, /ws)
+	mux.HandleFunc("GET /api/v1/agents", h.ProxyAgentRegistry)
+	mux.HandleFunc("POST /api/v1/agents", h.ProxyAgentRegistry)
+	mux.HandleFunc("GET /api/v1/agents/{id}", h.ProxyAgentRegistry)
+	mux.HandleFunc("PUT /api/v1/agents/{id}", h.ProxyAgentRegistry)
+	mux.HandleFunc("DELETE /api/v1/agents/{id}", h.ProxyAgentRegistry)
 	// Workflow Service proxy routes
 	mux.HandleFunc("GET /api/v1/workflows", h.ProxyWorkflowService)
 	mux.HandleFunc("POST /api/v1/workflows", h.ProxyWorkflowService)

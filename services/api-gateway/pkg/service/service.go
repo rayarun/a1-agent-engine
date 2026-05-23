@@ -62,9 +62,10 @@ func (s *InMemoryIdempotencyStore) Set(key string, entry models.IdempotencyEntry
 
 // GatewayHandler handles requests to the API Gateway.
 type GatewayHandler struct {
-	InitiatorURL       string
-	WorkflowServiceURL string
-	IdempotencyStore   IdempotencyStore
+	InitiatorURL        string
+	WorkflowServiceURL  string
+	AgentRegistryURL    string
+	IdempotencyStore    IdempotencyStore
 }
 
 // HandleTriggerAgent handles triggering an agent workflow.
@@ -596,6 +597,54 @@ func (h *GatewayHandler) ProxyWorkflowService(w http.ResponseWriter, r *http.Req
 	}
 
 	// Create a new request to the workflow service
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Copy headers from the original request
+	for key, values := range r.Header {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+
+	// Make the request
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to proxy request: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy response headers and status
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+
+	// Copy response body
+	io.Copy(w, resp.Body)
+}
+
+// ProxyAgentRegistry proxies agent management requests to the agent registry service.
+func (h *GatewayHandler) ProxyAgentRegistry(w http.ResponseWriter, r *http.Request) {
+	if h.AgentRegistryURL == "" {
+		http.Error(w, "Agent registry not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Build the target URL
+	targetURL := h.AgentRegistryURL + r.URL.Path
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	// Create a new request to the agent registry
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create request: %v", err), http.StatusInternalServerError)

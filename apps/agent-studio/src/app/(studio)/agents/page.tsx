@@ -47,15 +47,16 @@ import {
 const agentSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
-  version: z.string().regex(/^d+.d+.d+$/),
+  version: z.string().regex(/^\d+\.\d+\.\d+$/, "Version must be in format X.Y.Z"),
   system_prompt: z.string().min(10, "System prompt too short"),
   model: z.string().min(1),
-  framework: z.enum(["pydantic-ai", "anthropic-agents", "google-adk", "openai-agents"]).default("pydantic-ai"),
+  framework: z.enum(["pydantic-ai", "anthropic-agents", "google-adk", "openai-agents"]),
   max_iterations: z.number().int().min(1).max(100),
   memory_budget_mb: z.number().int().min(64),
   skills: z.array(z.object({ name: z.string().min(1), version: z.string().min(1) })),
   tools: z.array(z.object({ name: z.string().min(1), version: z.string().min(1) })).optional(),
-});type AgentForm = z.infer<typeof agentSchema>;
+});
+type AgentForm = z.infer<typeof agentSchema>;
 
 const FALLBACK_MODELS = [
   { id: "claude-opus-4-7", name: "Claude Opus 4.7" },
@@ -129,9 +130,11 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger render={<Button size="sm" className="gap-1.5" />}>
-        <Plus className="h-4 w-4" />
-        New Agent
+      <SheetTrigger>
+        <Button size="sm" className="gap-1.5">
+          <Plus className="h-4 w-4" />
+          New Agent
+        </Button>
       </SheetTrigger>
       <SheetContent className="sm:max-w-[600px] overflow-hidden flex flex-col p-0">
         <SheetHeader className="border-b border-border px-6 py-4 flex flex-row items-center justify-between">
@@ -203,7 +206,9 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Max Iterations</Label>
-            <div class="flex flex-col gap-1.5">
+              <Input type="number" {...register("max_iterations", { valueAsNumber: true })} />
+            </div>
+            <div className="flex flex-col gap-1.5">
               <Label>Framework</Label>
               <Controller
                 name="framework"
@@ -222,8 +227,6 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
                   </Select>
                 )}
               />
-            </div>
-              <Input type="number" {...register("max_iterations", { valueAsNumber: true })} />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Memory (MB)</Label>

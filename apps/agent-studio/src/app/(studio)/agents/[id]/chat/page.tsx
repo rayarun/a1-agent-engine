@@ -559,6 +559,9 @@ export default function ChatPage({
                 )
               );
               setStreaming(false);
+            } finally {
+              // Ensure streaming is always cleared, even if stream ends without explicit done/error
+              setStreaming(false);
             }
           };
 
