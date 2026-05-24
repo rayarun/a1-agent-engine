@@ -72,12 +72,17 @@ class DirectAgentExecutor:
         self.sessions: Dict[str, AgentSession] = {}
         self.max_sessions = max_sessions
         self.cleanup_task = None
-        self._start_cleanup_task()
+        # Cleanup task started lazily when event loop is available
 
-    def _start_cleanup_task(self) -> None:
-        """Start background cleanup task for expired sessions."""
+    def _ensure_cleanup_task(self) -> None:
+        """Start background cleanup task if not already running."""
         if self.cleanup_task is None:
-            self.cleanup_task = asyncio.create_task(self._cleanup_expired_sessions())
+            try:
+                loop = asyncio.get_running_loop()
+                self.cleanup_task = loop.create_task(self._cleanup_expired_sessions())
+            except RuntimeError:
+                # No event loop running yet (synchronous context)
+                pass
 
     async def _cleanup_expired_sessions(self) -> None:
         """Periodically clean up expired sessions."""
@@ -100,6 +105,8 @@ class DirectAgentExecutor:
         self, agent_id: str, tenant_id: str, session_id: Optional[str] = None
     ) -> AgentSession:
         """Get existing session or create new one."""
+        self._ensure_cleanup_task()  # Start cleanup if event loop available
+
         if session_id and session_id in self.sessions:
             session = self.sessions[session_id]
             session.last_activity = time.time()
