@@ -7,6 +7,15 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT
 -- Add index for execution_mode queries
 CREATE INDEX IF NOT EXISTS idx_agents_execution_mode ON agents(execution_mode);
 
--- Add check constraint to ensure valid values
-ALTER TABLE agents ADD CONSTRAINT agents_execution_mode_check
-    CHECK (execution_mode IN ('temporal', 'direct'));
+-- Add check constraint to ensure valid values (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'agents_execution_mode_check'
+        AND table_name = 'agents'
+    ) THEN
+        ALTER TABLE agents ADD CONSTRAINT agents_execution_mode_check
+            CHECK (execution_mode IN ('temporal', 'direct'));
+    END IF;
+END $$;

@@ -116,6 +116,7 @@ export interface AgentRecord {
   memory_budget_mb: number;
   mcp_servers?: string[];
   framework: AgentFramework;
+  execution_mode?: "temporal" | "direct";
   native_tools?: Record<string, unknown>;
   status: ResourceStatus;
   created_at: string;

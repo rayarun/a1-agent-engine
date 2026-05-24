@@ -306,15 +306,23 @@ class AgentWorkflow:
                     final_answer = f"Execution of '{h_tool_name}' was denied by the operator."
                     break
             else:
-                # Clear approved_hitl_tools once HITL is no longer pending
-                # This prevents re-execution of the same approved tool on subsequent iterations
-                if agent_context.get("approved_hitl_tools"):
-                    workflow.logger.info("[HITL WORKFLOW] Clearing approved_hitl_tools after execution")
-                    agent_context["approved_hitl_tools"] = {}
+                # HITL is not pending - but preserve approved_hitl_tools for potential re-use
+                # Only clear if we hit max iterations or get a final answer
+                # This allows the agent to use an approved tool multiple times without re-asking
+                approved = agent_context.get("approved_hitl_tools", {})
+                if approved and isinstance(approved, dict):
+                    workflow.logger.info(f"[HITL WORKFLOW] Preserving approved_hitl_tools={list(approved.keys())} for next iteration")
+                    # Don't clear - let the approved_hitl_tools persist
+                    pass
+                else:
+                    workflow.logger.info("[HITL WORKFLOW] No approved_hitl_tools to preserve")
 
             # Check if we should stop
             if final_answer or not continue_loop:
                 break
+
+        # Clear approved tools at the end of the loop
+        agent_context["approved_hitl_tools"] = {}
 
         if not final_answer:
             final_answer = "Exceeded max reasoning iterations without a conclusion."

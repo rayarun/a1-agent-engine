@@ -222,7 +222,7 @@ func HandleDirectExecution(w http.ResponseWriter, r *http.Request, req *models.S
 	// Forward to direct executor endpoint in agent-workers
 	directExecutorURL := os.Getenv("DIRECT_EXECUTOR_URL")
 	if directExecutorURL == "" {
-		directExecutorURL = "http://localhost:8092" // Default if not configured
+		directExecutorURL = "http://agent-workers:8091" // Use container hostname for Docker networking (8092 is used by bash-executor)
 	}
 
 	// Prepare request payload for direct executor
@@ -233,8 +233,8 @@ func HandleDirectExecution(w http.ResponseWriter, r *http.Request, req *models.S
 		"session_id": req.SessionID,
 	}
 
-	// Call direct executor endpoint
-	client := &http.Client{Timeout: 5 * time.Second}
+	// Call direct executor endpoint (long timeout for agent iterations)
+	client := &http.Client{Timeout: 60 * time.Second}
 	reqBody, _ := json.Marshal(payload)
 	directReq, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/agents/execute-direct", directExecutorURL), bytes.NewReader(reqBody))
 	directReq.Header.Set("Content-Type", "application/json")
@@ -249,10 +249,40 @@ func HandleDirectExecution(w http.ResponseWriter, r *http.Request, req *models.S
 	}
 	defer resp.Body.Close()
 
-	// Forward response from direct executor
+	log.Printf("[DIRECT] Response status: %d", resp.StatusCode)
+
+	// Parse response from direct executor
+	var directResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&directResp); err != nil {
+		log.Printf("[DIRECT] Failed to decode direct executor response: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to decode response: %v", err), http.StatusInternalServerError)
+		return
+	}
+	log.Printf("[DIRECT] Parsed response: %+v", directResp)
+
+	// Transform direct executor response into SessionStatus format (expected by API Gateway)
+	// Use session_id as workflow_id for polling compatibility
+	sessionID := fmt.Sprintf("%v", directResp["session_id"])
+	finished := false
+	if f, ok := directResp["finished"]; ok {
+		finished, _ = f.(bool)
+	}
+
+	status := "RUNNING"
+	if finished {
+		status = "COMPLETED"
+	}
+
+	resp_status := models.SessionStatus{
+		WorkflowID: sessionID,
+		RunID:      "",
+		Status:     status,
+	}
+
+	log.Printf("[DIRECT] Returning session %s with status %s", sessionID, status)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	json.NewDecoder(resp.Body).Decode(w)
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(resp_status)
 }
 
 // HandleGetSessionStatus returns the current execution status of a workflow.
@@ -340,10 +370,6 @@ func HandlePollSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "workflow id is required", http.StatusBadRequest)
 		return
 	}
-	if temporalClient == nil {
-		http.Error(w, "Temporal client not connected", http.StatusServiceUnavailable)
-		return
-	}
 
 	from := 0
 	if s := r.URL.Query().Get("from"); s != "" {
@@ -352,41 +378,109 @@ func HandlePollSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Query events
-	val, err := temporalClient.QueryWorkflow(r.Context(), id, "", "get_events")
-	events := []models.AgentEvent{}
-	if err == nil {
-		var all []models.AgentEvent
-		if err := val.Get(&all); err == nil {
-			log.Printf("[POLL_DEBUG] Got %d total events, from=%d", len(all), from)
-			if from < len(all) {
-				events = all[from:]
-				log.Printf("[POLL_DEBUG] Returning %d events from index %d", len(events), from)
-				// Log what we're returning
-				for i, ev := range events {
-					log.Printf("[POLL_DEBUG] Event %d: Type=%s, ApprovalID='%s'", i, ev.Type, ev.ApprovalID)
-					if ev.Type == "approval" {
-						log.Printf("[POLL_RETURN] Approval event at index %d: Type=%s, ApprovalID=%s, Reason=%s",
-							from+i, ev.Type, ev.ApprovalID, ev.Reason)
-						data, _ := json.Marshal(ev)
-						log.Printf("[POLL_RETURN] JSON: %s", string(data))
+	// First, try to query Temporal
+	var events []models.AgentEvent
+	var status string
+
+	if temporalClient != nil {
+		val, err := temporalClient.QueryWorkflow(r.Context(), id, "", "get_events")
+		if err == nil {
+			var all []models.AgentEvent
+			if err := val.Get(&all); err == nil {
+				log.Printf("[POLL_DEBUG] Got %d total events from Temporal, from=%d", len(all), from)
+				if from < len(all) {
+					events = all[from:]
+					log.Printf("[POLL_DEBUG] Returning %d events from index %d", len(events), from)
+					// Log what we're returning
+					for i, ev := range events {
+						log.Printf("[POLL_DEBUG] Event %d: Type=%s, ApprovalID='%s'", i, ev.Type, ev.ApprovalID)
+						if ev.Type == "approval" {
+							log.Printf("[POLL_RETURN] Approval event at index %d: Type=%s, ApprovalID=%s, Reason=%s",
+								from+i, ev.Type, ev.ApprovalID, ev.Reason)
+							data, _ := json.Marshal(ev)
+							log.Printf("[POLL_RETURN] JSON: %s", string(data))
+						}
 					}
 				}
+			} else {
+				log.Printf("[POLL_DEBUG] Error unmarshalling events: %v", err)
 			}
-		} else {
-			log.Printf("[POLL_DEBUG] Error unmarshalling events: %v", err)
+
+			// Query status
+			desc, err := temporalClient.DescribeWorkflowExecution(context.Background(), id, "")
+			status = "UNKNOWN"
+			if err == nil {
+				status = mapTemporalStatus(desc.WorkflowExecutionInfo.Status)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(models.PollResponse{
+				Events: events,
+				Status: status,
+			})
+			return
 		}
-	} else {
-		log.Printf("[POLL_DEBUG] Query error: %v", err)
+
+		// Temporal query failed, check if it's a direct executor session
+		log.Printf("[POLL_DEBUG] Temporal query failed: %v, trying direct executor", err)
 	}
 
-	// Query status
-	desc, err := temporalClient.DescribeWorkflowExecution(context.Background(), id, "")
-	status := "UNKNOWN"
-	if err == nil {
-		status = mapTemporalStatus(desc.WorkflowExecutionInfo.Status)
+	// Try direct executor for this session
+	directExecutorURL := os.Getenv("DIRECT_EXECUTOR_URL")
+	if directExecutorURL == "" {
+		directExecutorURL = "http://agent-workers:8091"
 	}
 
+	// Fetch session events from direct executor
+	client := &http.Client{Timeout: 10 * time.Second}
+	tenantID := r.Header.Get("X-Tenant-ID")
+	if tenantID == "" {
+		tenantID = "default-tenant"
+	}
+
+	pollURL := fmt.Sprintf("%s/api/v1/agents/sessions/%s/events?since_index=%d", directExecutorURL, id, from)
+	pollReq, _ := http.NewRequest("GET", pollURL, nil)
+	pollReq.Header.Set("X-Tenant-ID", tenantID)
+
+	log.Printf("[DIRECT_POLL] Polling direct executor: %s", pollURL)
+	resp, err := client.Do(pollReq)
+	if err != nil {
+		log.Printf("[DIRECT_POLL] Failed to fetch from direct executor: %v", err)
+		http.Error(w, fmt.Sprintf("Session not found"), http.StatusNotFound)
+		return
+	}
+	defer resp.Body.Close()
+
+	var pollResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&pollResp); err != nil {
+		log.Printf("[DIRECT_POLL] Failed to decode response: %v", err)
+		http.Error(w, fmt.Sprintf("Invalid session response"), http.StatusInternalServerError)
+		return
+	}
+
+	// Extract events from response
+	events = []models.AgentEvent{}
+	if eventsData, ok := pollResp["events"].([]interface{}); ok {
+		for _, e := range eventsData {
+			if ev, ok := e.(map[string]interface{}); ok {
+				eventObj := models.AgentEvent{
+					Type: fmt.Sprintf("%v", ev["type"]),
+				}
+				if content, ok := ev["content"]; ok {
+					eventObj.Content = fmt.Sprintf("%v", content)
+				}
+				if toolName, ok := ev["name"]; ok {
+					eventObj.ToolName = fmt.Sprintf("%v", toolName)
+				}
+				events = append(events, eventObj)
+			}
+		}
+	}
+
+	// Direct executor sessions are completed when returned
+	status = "COMPLETED"
+
+	log.Printf("[DIRECT_POLL] Returning %d events from direct executor", len(events))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(models.PollResponse{
 		Events: events,
@@ -452,8 +546,8 @@ func fetchManifest(ctx context.Context, agentID, tenantID string) *models.AgentM
 		return nil
 	}
 
-	log.Printf("[FETCH_MANIFEST] Successfully fetched: model=%s, framework=%s, system_prompt_len=%d, max_iterations=%d",
-		manifest.Model, manifest.Framework, len(manifest.SystemPrompt), manifest.MaxIterations)
+	log.Printf("[FETCH_MANIFEST] Successfully fetched: model=%s, framework=%s, execution_mode=%s, system_prompt_len=%d, max_iterations=%d",
+		manifest.Model, manifest.Framework, manifest.ExecutionMode, len(manifest.SystemPrompt), manifest.MaxIterations)
 
 	// Store in cache with TTL
 	manifestStore.Store(cacheKey, cachedManifest{

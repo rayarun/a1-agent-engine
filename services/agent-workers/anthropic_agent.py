@@ -80,7 +80,9 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
         try:
             # Check if resuming with an approved tool that needs execution
             approved_tools = context.get('approved_hitl_tools', {})
+            executed_tool_use_ids = context.get('_executed_tool_use_ids', set())  # Track already-executed tools to avoid infinite loop
             logger.info(f"[DEBUG] approved_hitl_tools in context: {approved_tools}")
+            logger.info(f"[DEBUG] executed_tool_use_ids: {executed_tool_use_ids}")
             logger.info(f"[DEBUG] messages count: {len(messages)}")
 
             found_approved = False
@@ -107,16 +109,23 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
                                 if isinstance(block, dict):
                                     block_type = block.get("type")
                                     block_name = block.get("name")
-                                    logger.info(f"[DEBUG]       Dict block: type={block_type}, name={block_name}")
+                                    block_id = block.get("id", "")
+                                    logger.info(f"[DEBUG]       Dict block: type={block_type}, name={block_name}, id={block_id}")
                                 else:
                                     block_type = getattr(block, "type", None)
                                     block_name = getattr(block, "name", None)
-                                    logger.info(f"[DEBUG]       SDK block: type={block_type}, name={block_name}")
+                                    block_id = getattr(block, "id", "")
+                                    logger.info(f"[DEBUG]       SDK block: type={block_type}, name={block_name}, id={block_id}")
 
                                 if block_type == "tool_use":
-                                    logger.info(f"[DEBUG]       Found tool_use: {block_name}")
+                                    logger.info(f"[DEBUG]       Found tool_use: {block_name}, id={block_id}")
+                                    # Only execute if not already executed (prevent infinite loop)
+                                    if block_id in executed_tool_use_ids:
+                                        logger.info(f"[DEBUG]       Skipping tool_use {block_name} (id={block_id}) - already executed")
+                                        continue
+
                                     if block_name in approved_tools:
-                                        logger.info(f"[APPROVED TOOL MATCH] tool={block_name}, id={approved_tools[block_name]}")
+                                        logger.info(f"[APPROVED TOOL MATCH] tool={block_name}, id={block_id}, approval_id={approved_tools[block_name]}")
                                         found_approved = True
 
                                         # Execute the approved tool directly
@@ -148,6 +157,12 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
                                             logger.error(f"[TOOL ERROR] {block_name}: {e}")
                                             result = {"error": str(e)}
 
+                                        # Mark this tool_use as executed to prevent re-execution
+                                        if '_executed_tool_use_ids' not in context:
+                                            context['_executed_tool_use_ids'] = set()
+                                        context['_executed_tool_use_ids'].add(tool_use_id)
+                                        logger.info(f"[DEBUG] Added {tool_use_id} to executed_tool_use_ids")
+
                                         # Add tool result to messages
                                         messages.append({
                                             "role": "user",
@@ -159,8 +174,9 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
                                                 }
                                             ],
                                         })
-                                        # Clear approved_tools and return - don't continue to model call
-                                        context["approved_hitl_tools"] = {}
+                                        # DO NOT clear approved_hitl_tools here - let the workflow manage lifecycle
+                                        # This allows approved tools to be reused if the agent calls them again
+                                        # The workflow will clear them when HITL is not pending anymore
                                         logger.info("[DEBUG] Approved tool executed, returning to workflow with tool result")
                                         return {
                                             "final_answer": None,

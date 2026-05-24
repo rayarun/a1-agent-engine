@@ -261,7 +261,7 @@ func (h *GatewayHandler) HandleChatStream(w http.ResponseWriter, r *http.Request
 	fmt.Fprintf(w, ": connected\n\n")
 	flusher.Flush()
 
-	poll := &http.Client{Timeout: 5 * time.Second}
+	poll := &http.Client{Timeout: 120 * time.Second}
 	cursor := 0
 	terminal := map[string]bool{
 		"COMPLETED": true, "FAILED": true,

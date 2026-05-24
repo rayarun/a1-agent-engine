@@ -16,6 +16,7 @@ import sys
 import asyncio
 import logging
 import os
+import threading
 
 # Diagnostic block to catch top-level import errors
 try:
@@ -34,6 +35,9 @@ try:
     from activities_workflow import invoke_agent, evaluate_condition
     from activities_memory import recall_memories, store_memory
     from activities_cost import record_cost_event
+
+    # Phase 3: Direct execution HTTP server
+    from direct_http_handler import setup_http_server
 
     # TODO: Phase 4 - Register Temporal contrib plugins (OpenAIAgentsPlugin, GoogleAdkPlugin)
     # For now, ADK and OpenAI agents route through activities without Temporal plugins
@@ -74,6 +78,17 @@ async def main():
         logger.error("Could not connect to Temporal after 10 attempts. Exiting.")
         sys.exit(1)
 
+    # Phase 3: Start HTTP server for direct execution in background thread
+    # Use port 8091 instead of 8092 (bash-executor uses 8092)
+    http_port = os.getenv("DIRECT_EXECUTOR_PORT", "8091")
+    http_thread = threading.Thread(
+        target=setup_http_server,
+        kwargs={"host": "0.0.0.0", "port": int(http_port)},
+        daemon=True,
+    )
+    http_thread.start()
+    logger.info(f"[DIRECT HTTP] Background thread started on port {http_port}")
+
     # Initialize and run worker
     try:
         worker = Worker(
@@ -100,7 +115,7 @@ async def main():
             ],
             max_concurrent_activities=16,
         )
-        
+
         logger.info(f"Starting Temporal Agent Worker on queue '{task_queue}'...")
         await worker.run()
     except Exception as e:

@@ -17,6 +17,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -72,6 +73,8 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	manifest.TenantID = tid
+
+	log.Printf("[DEBUG] CREATE handler received: id=%s, execution_mode=%s, framework=%s", manifest.ID, manifest.ExecutionMode, manifest.Framework)
 
 	rec := &store.AgentRecord{
 		AgentManifest: manifest,
@@ -154,6 +157,8 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	manifest.ID = id
 	manifest.TenantID = tid
+
+	log.Printf("[DEBUG] UPDATE handler received: id=%s, execution_mode=%s, framework=%s", manifest.ID, manifest.ExecutionMode, manifest.Framework)
 
 	rec := &store.AgentRecord{
 		AgentManifest: manifest,

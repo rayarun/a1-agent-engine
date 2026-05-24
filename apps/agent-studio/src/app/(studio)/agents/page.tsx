@@ -19,7 +19,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Plus, Trash2, Loader2, Bot, MessageSquare, X, Sparkles } from "lucide-react";
+import { Plus, Trash2, Loader2, Bot, MessageSquare, X, Sparkles, Zap, Clock } from "lucide-react";
 import Link from "next/link";
 import { agentsApi, skillsApi, toolsApi, modelsApi } from "@/lib/api";
 import { ManifestAssistantPanel, AssistantDraft } from "@/components/manifest-assistant-panel";
@@ -103,6 +103,7 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
     queryFn: () => toolsApi.list("approved"),
   });
 
+  const qc = useQueryClient();
   const { data: modelsData } = useQuery({
     queryKey: ["models"],
     queryFn: () => modelsApi.list(),
@@ -118,7 +119,12 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
 
   const mutation = useMutation({
     mutationFn: (data: AgentForm) => agentsApi.create(data),
-    onSuccess: () => { reset(); setOpen(false); onCreated(); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["agents"] });
+      reset();
+      setOpen(false);
+      onCreated();
+    },
   });
 
   const handleApplyAssistantDraft = (draft: AssistantDraft) => {
@@ -155,7 +161,15 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
 
         {/* Form - Full Width */}
         <form
-          onSubmit={handleSubmit((d) => mutation.mutate(d))}
+          onSubmit={handleSubmit((d) => {
+            // Ensure execution_mode is included in submission
+            const dataToSubmit = {
+              ...d,
+              execution_mode: d.execution_mode || "temporal",
+            };
+            console.log("Submitting agent:", dataToSubmit);
+            mutation.mutate(dataToSubmit);
+          })}
           className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4"
         >
           <div className="grid grid-cols-2 gap-4">
@@ -186,7 +200,7 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
             {errors.system_prompt && <p className="text-xs text-destructive">{errors.system_prompt.message}</p>}
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
               <Label>Model</Label>
               <Controller
@@ -205,10 +219,6 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
                   </Select>
                 )}
               />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>Max Iterations</Label>
-              <Input type="number" {...register("max_iterations", { valueAsNumber: true })} />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Framework</Label>
@@ -231,6 +241,14 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
               />
             </div>
             <div className="flex flex-col gap-1.5">
+              <Label>Max Iterations</Label>
+              <Input type="number" {...register("max_iterations", { valueAsNumber: true })} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>Memory (MB)</Label>
+              <Input type="number" {...register("memory_budget_mb", { valueAsNumber: true })} />
+            </div>
+            <div className="flex flex-col gap-1.5 col-span-2">
               <Label>Execution Mode</Label>
               <Controller
                 name="execution_mode"
@@ -241,19 +259,15 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
                       <SelectValue placeholder="Select execution mode" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="temporal">Temporal (Durable)</SelectItem>
-                      <SelectItem value="direct">Direct (Fast, Lightweight)</SelectItem>
+                      <SelectItem value="temporal">Temporal (Durable) — Governed, HITL approvals, full durability</SelectItem>
+                      <SelectItem value="direct">Direct (Fast, Lightweight) — In-process, no governance overhead</SelectItem>
                     </SelectContent>
                   </Select>
                 )}
               />
               <p className="text-xs text-muted-foreground">
-                Temporal: governed, HITL approvals, full durability. Direct: fast, in-process, no governance.
+                Choose how agents execute: Temporal for production with governance, Direct for fast inference without approval gates.
               </p>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>Memory (MB)</Label>
-              <Input type="number" {...register("memory_budget_mb", { valueAsNumber: true })} />
             </div>
           </div>
 
@@ -418,6 +432,15 @@ export default function AgentsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <Bot className="h-4 w-4 text-primary shrink-0" />
+                    {agent.execution_mode === "direct" ? (
+                      <div className="flex items-center gap-1" title="Direct (Fast, Lightweight)">
+                        <Zap className="h-4 w-4 text-orange-500 shrink-0" />
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1" title="Temporal (Durable)">
+                        <Clock className="h-4 w-4 text-blue-500 shrink-0" />
+                      </div>
+                    )}
                     <span className="font-semibold">{agent.name}</span>
                     <span className="text-xs text-muted-foreground font-mono">v{agent.version}</span>
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[agent.status] ?? ""}`}>
@@ -427,6 +450,8 @@ export default function AgentsPage() {
                   <p className="text-muted-foreground text-xs mt-1 line-clamp-2">{agent.system_prompt}</p>
                   <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
                     <span>model: <span className="font-mono text-foreground">{agent.model}</span></span>
+                    <span>·</span>
+                    <span>execution: <span className="font-mono text-foreground">{agent.execution_mode || "temporal"}</span></span>
                     <span>·</span>
                     <span>max_iter: {agent.max_iterations}</span>
                     {agent.skills?.length > 0 && (

@@ -21,7 +21,7 @@ import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { Bot, MessageSquare, ArrowLeft, Loader2, Zap, Edit2, Trash2, Plus, Sparkles } from "lucide-react";
+import { Bot, MessageSquare, ArrowLeft, Loader2, Zap, Edit2, Trash2, Plus, Sparkles, Clock } from "lucide-react";
 import { agentsApi, skillsApi, toolsApi, modelsApi, mcpApi } from "@/lib/api";
 import { ManifestAssistantPanel, AssistantDraft } from "@/components/manifest-assistant-panel";
 import { Button } from "@/components/ui/button";
@@ -57,6 +57,8 @@ const agentSchema = z.object({
   version: z.string().regex(/^\d+\.\d+\.\d+$/),
   system_prompt: z.string().min(10, "System prompt too short"),
   model: z.string().min(1),
+  framework: z.enum(["pydantic-ai", "anthropic-agents", "google-adk", "openai-agents"]).optional(),
+  execution_mode: z.enum(["temporal", "direct"]).optional(),
   max_iterations: z.number().int().min(1).max(100),
   memory_budget_mb: z.number().int().min(64),
   skills: z.array(z.object({ name: z.string().min(1), version: z.string().min(1) })).optional(),
@@ -83,6 +85,8 @@ function EditAgentSheet({ agent, onUpdated }: { agent: any; onUpdated: () => voi
       version: agent.version || "1.0.0",
       system_prompt: agent.system_prompt || "",
       model: agent.model || "",
+      framework: agent.framework || "pydantic-ai",
+      execution_mode: agent.execution_mode || "temporal",
       max_iterations: agent.max_iterations || 20,
       memory_budget_mb: agent.memory_budget_mb || 256,
       skills: agent.skills || [],
@@ -152,7 +156,17 @@ function EditAgentSheet({ agent, onUpdated }: { agent: any; onUpdated: () => voi
           </Button>
         </SheetHeader>
         <form
-          onSubmit={handleSubmit((d) => mutation.mutate(d))}
+          onSubmit={handleSubmit((d) => {
+            // Ensure execution_mode and framework are included
+            const dataToSubmit = {
+              ...d,
+              framework: d.framework || "pydantic-ai",
+              execution_mode: d.execution_mode || "temporal",
+            };
+            console.log("🔵 [FRONTEND] Updating agent with data:", JSON.stringify(dataToSubmit, null, 2));
+            console.log("🔵 [FRONTEND] execution_mode value:", dataToSubmit.execution_mode);
+            mutation.mutate(dataToSubmit);
+          })}
           className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4"
         >
           <div className="grid grid-cols-2 gap-4">
@@ -209,6 +223,50 @@ function EditAgentSheet({ agent, onUpdated }: { agent: any; onUpdated: () => voi
               placeholder="256"
               {...register("memory_budget_mb", { valueAsNumber: true })}
             />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label>Framework</Label>
+              <Controller
+                name="framework"
+                control={control}
+                render={({ field }) => (
+                  <Select value={field.value || "pydantic-ai"} onValueChange={field.onChange}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select framework" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pydantic-ai">PydanticAI</SelectItem>
+                      <SelectItem value="anthropic-agents">Anthropic Agents</SelectItem>
+                      <SelectItem value="google-adk">Google ADK</SelectItem>
+                      <SelectItem value="openai-agents">OpenAI Agents</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>Execution Mode</Label>
+              <Controller
+                name="execution_mode"
+                control={control}
+                render={({ field }) => (
+                  <Select value={field.value || "temporal"} onValueChange={field.onChange}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select execution mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="temporal">Temporal (Durable)</SelectItem>
+                      <SelectItem value="direct">Direct (Fast)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+              <p className="text-xs text-muted-foreground">
+                Temporal: governed, HITL approvals. Direct: fast, lightweight.
+              </p>
+            </div>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -448,11 +506,24 @@ export default function AgentDetailPage({
           </div>
           <div>
             <h1 className="text-xl font-semibold">{agent.name}</h1>
-            <div className="flex items-center gap-2 mt-1">
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
               <span className="text-xs text-muted-foreground font-mono">v{agent.version}</span>
               <Badge variant={agent.status === "active" ? "default" : "secondary"}>
                 {STATUS_LABELS[agent.status] ?? agent.status}
               </Badge>
+              <div className="flex items-center gap-1 px-2 py-1 rounded bg-muted text-xs">
+                {agent.execution_mode === "direct" ? (
+                  <>
+                    <Zap className="h-3 w-3 text-orange-500" />
+                    <span>Direct (Fast)</span>
+                  </>
+                ) : (
+                  <>
+                    <Clock className="h-3 w-3 text-blue-500" />
+                    <span>Temporal (Durable)</span>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>

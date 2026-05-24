@@ -20,8 +20,6 @@ Bypasses Skill Dispatcher for speed; tool invocation is direct and local.
 import asyncio
 import json
 import logging
-import subprocess
-from typing import Any
 
 import aiohttp
 
@@ -46,9 +44,13 @@ class DirectToolsExecutor:
         Returns:
             Tool result as JSON string
         """
+        logger.info(f"[DIRECT_TOOLS] invoke called: tool_name={tool_name}, args_keys={list(args.keys())}")
         try:
             if tool_name == "bash":
-                return await self._bash(args.get("command", ""))
+                logger.info(f"[DIRECT_TOOLS] Executing bash: {args.get('command', '')[:100]}")
+                result = await self._bash(args.get("command", ""))
+                logger.info(f"[DIRECT_TOOLS] Bash result: {result[:200]}")
+                return result
             elif tool_name == "web_search":
                 return await self._web_search(args.get("query", ""))
             elif tool_name == "kg_search":
@@ -66,13 +68,15 @@ class DirectToolsExecutor:
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                timeout=30,
             )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return json.dumps({"error": "Command timed out after 30 seconds"})
             output = stdout.decode() or stderr.decode()
             return json.dumps({"output": output, "return_code": process.returncode})
-        except asyncio.TimeoutError:
-            return json.dumps({"error": "Command timed out after 30 seconds"})
         except Exception as e:
             return json.dumps({"error": str(e)})
 

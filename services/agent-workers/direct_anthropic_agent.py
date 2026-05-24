@@ -20,7 +20,7 @@ Implements multi-turn ReAct loop directly in-process.
 import json
 import logging
 import os
-from typing import Optional
+from typing import Optional, Set
 
 import anthropic
 
@@ -39,6 +39,7 @@ class DirectAnthropicAgent:
         self.model = context.get("model", "claude-opus-4-7")
         self.system_prompt = context.get("system_prompt", "You are a helpful assistant")
         self.max_iterations = context.get("max_iterations", 5)
+        self.approved_tool_use_ids: Set[str] = set()  # Track approved tool calls to prevent re-asking
 
         # Initialize Anthropic client (direct, no Temporal plugin)
         anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
@@ -140,6 +141,19 @@ class DirectAnthropicAgent:
                     tool_use_id = block.id
 
                     logger.info(f"Tool use: {tool_name}")
+
+                    # Skip tool execution if already approved in this session
+                    if tool_use_id in self.approved_tool_use_ids:
+                        logger.info(f"Tool {tool_name} (id={tool_use_id}) already approved, skipping re-approval")
+                        # Return empty result (tool already executed in approval phase)
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": json.dumps({"skipped": True, "reason": "Already approved and executed"}),
+                            }
+                        )
+                        continue
 
                     # Invoke tool directly (no Skill Dispatcher)
                     result_str = await self.tools_executor.invoke(tool_name, tool_input)
