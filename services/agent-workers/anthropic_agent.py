@@ -134,6 +134,28 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
                                             result_str = await tool_execution_client.invoke_direct_tool(
                                                 str(block_name), "1.0.0", tool_input, mutating=True
                                             )
+
+                                            # Check for HITL marker - if tool execution requires approval again
+                                            if result_str.startswith("__HITL_PENDING__"):
+                                                logger.info(f"[DEBUG] Approved tool execution triggered HITL again: {result_str[:50]}")
+                                                # Return immediately with the nested HITL pending state
+                                                parts = result_str.split("::")
+                                                nested_approval_id = parts[1] if len(parts) > 1 else ""
+                                                nested_tool_name = parts[2] if len(parts) > 2 else block_name
+                                                nested_tool_args = json.loads(parts[3]) if len(parts) > 3 else tool_input
+                                                return {
+                                                    "final_answer": None,
+                                                    "tool_calls": [],
+                                                    "messages_delta": messages,
+                                                    "continue_loop": False,
+                                                    "hitl_pending": True,
+                                                    "hitl_approval_id": nested_approval_id,
+                                                    "hitl_tool_name": nested_tool_name,
+                                                    "hitl_tool_args": nested_tool_args,
+                                                    "tokens_in": tokens_in,
+                                                    "tokens_out": tokens_out,
+                                                }
+
                                             result = json.loads(result_str) if result_str.startswith("{") else result_str
                                             logger.info(f"[TOOL RESULT] {block_name}: success")
                                         except Exception as e:
