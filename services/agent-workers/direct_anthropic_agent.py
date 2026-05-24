@@ -113,6 +113,13 @@ class DirectAnthropicAgent:
                 "error": str(e),
             }
 
+        # Extract thinking blocks from response content and emit as events
+        for block in response.content:
+            if block.type == "thinking":
+                thinking_text = getattr(block, "thinking", "")
+                if thinking_text:
+                    session.add_event("thinking", content=thinking_text)
+
         # Check if agent finished
         if response.stop_reason == "end_turn":
             final_answer = ""

@@ -169,6 +169,7 @@ class DirectAgentExecutor:
             # Emit events from result
             if "final_answer" in result and result["final_answer"]:
                 session.add_event("final_answer", content=result["final_answer"])
+                session.state["finished"] = True  # Mark session as finished
                 return {
                     "session_id": session.id,
                     "events": session.get_new_events(),
@@ -181,6 +182,8 @@ class DirectAgentExecutor:
                     session.add_event("tool_call", name=tool_call["name"])
 
             if "continue_loop" in result:
+                if not result["continue_loop"]:
+                    session.state["finished"] = True  # Mark session as finished
                 return {
                     "session_id": session.id,
                     "events": session.get_new_events(),
@@ -195,6 +198,7 @@ class DirectAgentExecutor:
         except Exception as e:
             logger.error(f"Execution iteration failed: {e}")
             session.add_event("error", message=str(e))
+            session.state["finished"] = True  # Mark session as finished on error
             return {
                 "session_id": session.id,
                 "events": session.get_new_events(),
