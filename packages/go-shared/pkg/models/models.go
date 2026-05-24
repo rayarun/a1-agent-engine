@@ -166,6 +166,7 @@ type AgentManifest struct {
 	MemoryBudgetMB int            `json:"memory_budget_mb"`
 	MCPServers     []string       `json:"mcp_servers,omitempty"`
 	Framework      string         `json:"framework,omitempty"`       // pydantic-ai | anthropic-agents | google-adk | openai-agents
+	ExecutionMode  string         `json:"execution_mode,omitempty"`  // temporal (default) | direct
 	NativeTools    map[string]any `json:"native_tools,omitempty"`    // framework-specific tool configuration
 	Status         ResourceStatus `json:"status"`
 }

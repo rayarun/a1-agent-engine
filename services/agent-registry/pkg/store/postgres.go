@@ -46,13 +46,17 @@ func (s *PostgresStore) Create(ctx context.Context, rec *AgentRecord) error {
 	if framework == "" {
 		framework = "pydantic-ai"
 	}
+	executionMode := rec.ExecutionMode
+	if executionMode == "" {
+		executionMode = "temporal"
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO agents
 			(id, tenant_id, name, version, system_prompt, skills, tools, model,
-			 max_iterations, memory_budget_mb, framework, native_tools, status, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+			 max_iterations, memory_budget_mb, framework, execution_mode, native_tools, status, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
 		rec.ID, rec.TenantID, rec.Name, rec.Version, rec.SystemPrompt, skills, tools,
-		rec.Model, rec.MaxIterations, rec.MemoryBudgetMB, framework, nativeTools,
+		rec.Model, rec.MaxIterations, rec.MemoryBudgetMB, framework, executionMode, nativeTools,
 		string(rec.Status), rec.CreatedAt,
 	)
 	return err
@@ -61,7 +65,7 @@ func (s *PostgresStore) Create(ctx context.Context, rec *AgentRecord) error {
 func (s *PostgresStore) GetByID(ctx context.Context, id, tenantID string) (*AgentRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, name, version, system_prompt, skills, tools, model,
-		       max_iterations, memory_budget_mb, framework, native_tools, status, created_at
+		       max_iterations, memory_budget_mb, framework, execution_mode, native_tools, status, created_at
 		FROM agents
 		WHERE id = $1 AND tenant_id = $2`, id, tenantID)
 	return scanAgent(row)
@@ -69,7 +73,7 @@ func (s *PostgresStore) GetByID(ctx context.Context, id, tenantID string) (*Agen
 
 func (s *PostgresStore) List(ctx context.Context, f ListFilter) ([]*AgentRecord, error) {
 	q := `SELECT id, tenant_id, name, version, system_prompt, skills, tools, model,
-		         max_iterations, memory_budget_mb, framework, native_tools, status, created_at
+		         max_iterations, memory_budget_mb, framework, execution_mode, native_tools, status, created_at
 		  FROM agents WHERE tenant_id = $1`
 	args := []any{f.TenantID}
 	if f.Status != "" {
@@ -101,13 +105,17 @@ func (s *PostgresStore) Update(ctx context.Context, rec *AgentRecord) error {
 	if framework == "" {
 		framework = "pydantic-ai"
 	}
+	executionMode := rec.ExecutionMode
+	if executionMode == "" {
+		executionMode = "temporal"
+	}
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE agents
 		SET name=$1, version=$2, system_prompt=$3, skills=$4, tools=$5, model=$6,
-		    max_iterations=$7, memory_budget_mb=$8, framework=$9, native_tools=$10, status=$11
-		WHERE id=$12 AND tenant_id=$13`,
+		    max_iterations=$7, memory_budget_mb=$8, framework=$9, execution_mode=$10, native_tools=$11, status=$12
+		WHERE id=$13 AND tenant_id=$14`,
 		rec.Name, rec.Version, rec.SystemPrompt, skills, tools, rec.Model,
-		rec.MaxIterations, rec.MemoryBudgetMB, framework, nativeTools, string(rec.Status),
+		rec.MaxIterations, rec.MemoryBudgetMB, framework, executionMode, nativeTools, string(rec.Status),
 		rec.ID, rec.TenantID,
 	)
 	if err != nil {
@@ -154,10 +162,10 @@ type scanner interface {
 func scanAgent(s scanner) (*AgentRecord, error) {
 	var rec AgentRecord
 	var skills, tools, nativeTools []byte
-	var framework sql.NullString
+	var framework, executionMode sql.NullString
 	err := s.Scan(
 		&rec.ID, &rec.TenantID, &rec.Name, &rec.Version, &rec.SystemPrompt, &skills, &tools,
-		&rec.Model, &rec.MaxIterations, &rec.MemoryBudgetMB, &framework, &nativeTools, &rec.Status, &rec.CreatedAt,
+		&rec.Model, &rec.MaxIterations, &rec.MemoryBudgetMB, &framework, &executionMode, &nativeTools, &rec.Status, &rec.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -172,6 +180,11 @@ func scanAgent(s scanner) (*AgentRecord, error) {
 		rec.Framework = framework.String
 	} else {
 		rec.Framework = "pydantic-ai"
+	}
+	if executionMode.Valid {
+		rec.ExecutionMode = executionMode.String
+	} else {
+		rec.ExecutionMode = "temporal"
 	}
 	return &rec, nil
 }

@@ -84,6 +84,7 @@ export interface MCPServer {
 }
 
 export type AgentFramework = "pydantic-ai" | "anthropic-agents" | "google-adk" | "openai-agents";
+export type ExecutionMode = "temporal" | "direct";
 
 export interface AgentManifest {
   id: string;
@@ -98,6 +99,7 @@ export interface AgentManifest {
   memory_budget_mb: number;
   mcp_servers?: string[];
   framework: AgentFramework;
+  execution_mode?: ExecutionMode;
   native_tools?: Record<string, unknown>;
 }
 

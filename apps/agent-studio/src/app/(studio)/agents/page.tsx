@@ -51,6 +51,7 @@ const agentSchema = z.object({
   system_prompt: z.string().min(10, "System prompt too short"),
   model: z.string().min(1),
   framework: z.enum(["pydantic-ai", "anthropic-agents", "google-adk", "openai-agents"]),
+  execution_mode: z.enum(["temporal", "direct"]).optional(),
   max_iterations: z.number().int().min(1).max(100),
   memory_budget_mb: z.number().int().min(64),
   skills: z.array(z.object({ name: z.string().min(1), version: z.string().min(1) })),
@@ -81,6 +82,7 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
     defaultValues: {
       model: "claude-opus-4-7",
       framework: "pydantic-ai",
+      execution_mode: "temporal",
       max_iterations: 20,
       memory_budget_mb: 256,
       version: "1.0.0",
@@ -227,6 +229,27 @@ function CreateAgentSheet({ onCreated }: { onCreated: () => void }) {
                   </Select>
                 )}
               />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>Execution Mode</Label>
+              <Controller
+                name="execution_mode"
+                control={control}
+                render={({ field }) => (
+                  <Select value={field.value || "temporal"} onValueChange={field.onChange}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select execution mode" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="temporal">Temporal (Durable)</SelectItem>
+                      <SelectItem value="direct">Direct (Fast, Lightweight)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+              <p className="text-xs text-muted-foreground">
+                Temporal: governed, HITL approvals, full durability. Direct: fast, in-process, no governance.
+              </p>
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>Memory (MB)</Label>

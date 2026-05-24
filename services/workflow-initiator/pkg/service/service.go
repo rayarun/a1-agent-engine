@@ -15,6 +15,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -159,6 +160,13 @@ func HandleStartSession(w http.ResponseWriter, r *http.Request) {
 			req.Manifest.Model, len(req.Manifest.SystemPrompt))
 	}
 
+	// Route based on execution_mode
+	if req.Manifest != nil && req.Manifest.ExecutionMode == "direct" {
+		log.Printf("[INITIATOR] Routing to direct executor (execution_mode=direct)")
+		HandleDirectExecution(w, r, &req)
+		return
+	}
+
 	// Use tenant-specific task queue for proper isolation
 	taskQueue := fmt.Sprintf("%s-agent-queue", req.TenantID)
 
@@ -205,6 +213,46 @@ func HandleStartSession(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(resp)
+}
+
+// HandleDirectExecution routes to direct agent executor (non-Temporal).
+func HandleDirectExecution(w http.ResponseWriter, r *http.Request, req *models.StartSessionRequest) {
+	log.Printf("[DIRECT] HandleDirectExecution: agent_id=%s, tenant_id=%s", req.AgentID, req.TenantID)
+
+	// Forward to direct executor endpoint in agent-workers
+	directExecutorURL := os.Getenv("DIRECT_EXECUTOR_URL")
+	if directExecutorURL == "" {
+		directExecutorURL = "http://localhost:8092" // Default if not configured
+	}
+
+	// Prepare request payload for direct executor
+	payload := map[string]interface{}{
+		"agent_id":  req.AgentID,
+		"message":   req.Prompt,
+		"manifest":  req.Manifest,
+		"session_id": req.SessionID,
+	}
+
+	// Call direct executor endpoint
+	client := &http.Client{Timeout: 5 * time.Second}
+	reqBody, _ := json.Marshal(payload)
+	directReq, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/agents/execute-direct", directExecutorURL), bytes.NewReader(reqBody))
+	directReq.Header.Set("Content-Type", "application/json")
+	directReq.Header.Set("X-Tenant-ID", req.TenantID)
+
+	log.Printf("[DIRECT] Forwarding to %s", directExecutorURL)
+	resp, err := client.Do(directReq)
+	if err != nil {
+		log.Printf("[DIRECT] Failed to call direct executor: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to reach direct executor: %v", err), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Forward response from direct executor
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	json.NewDecoder(resp.Body).Decode(w)
 }
 
 // HandleGetSessionStatus returns the current execution status of a workflow.
