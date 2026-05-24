@@ -43,6 +43,9 @@ class DirectAnthropicAgent:
 
         # Initialize Anthropic client (direct, no Temporal plugin)
         anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+        # Strip trailing /v1 if present (SDK adds it automatically)
+        if anthropic_base_url.endswith("/v1"):
+            anthropic_base_url = anthropic_base_url[:-3]
         anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
         self.client = anthropic.AsyncAnthropic(
             base_url=anthropic_base_url,
