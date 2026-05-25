@@ -379,6 +379,108 @@ graph TD
  { type: "thinking" | "tool_call" | "text" | "done" }
 
 ════════════════════════════════════════════════════════════════════════════════════════════
+                 FRAMEWORK-AGNOSTIC AGENT EXECUTION ARCHITECTURE
+════════════════════════════════════════════════════════════════════════════════════════════
+
+All agent frameworks (Anthropic SDK, OpenAI Agents, Google ADK, PydanticAI) follow the same
+execution pattern to maximize code reuse and minimize duplication across Temporal and direct modes.
+
+## Core Pattern: Framework Core + Execution Mode Wrappers
+
+Each framework has three layers:
+
+ 1. **Core Module** (Framework-Agnostic)
+    ├─ ReAct loop (LLM calls, tool invocation, response processing)
+    ├─ Tool definition building
+    ├─ Thinking block extraction
+    ├─ Token tracking
+    └─ Accepts tool executor abstraction (varies by execution mode)
+
+ 2. **Temporal Wrapper** (Temporal-Specific)
+    ├─ Wraps core module
+    ├─ Handles HITL approval context (approved_hitl_tools)
+    ├─ Returns AgentDecision format for workflow state machine
+    ├─ Uses ToolExecutionClient (platform tool bridge with governance)
+    └─ Called as Temporal activity (runs inside workflow)
+
+ 3. **Direct Wrapper** (Direct Execution-Specific)
+    ├─ Wraps core module
+    ├─ Handles session state and event streaming (SSE)
+    ├─ Emits events to session.events queue (thinking, tool_call, tool_result, final_answer)
+    ├─ Uses DirectToolsExecutor (bypasses Skill Dispatcher for speed)
+    └─ Called via HTTP endpoint (stateless per-iteration execution)
+
+## Example: Anthropic SDK
+
+```
+anthropic_agent_core.py (shared)
+  ├─ AnthropicAgentCore
+  │  ├─ build_tool_definitions()
+  │  ├─ run_react_loop(messages, iteration_callback)
+  │  └─ Anthropic SDK client initialization
+  └─ No execution-mode concerns (pure ReAct logic)
+
+anthropic_agent.py (Temporal wrapper)
+  ├─ AnthropicTemporalAgent(AnthropicAgentCore)
+  │  ├─ execute_step(session, context) → AgentDecision
+  │  └─ Handles HITL resumption
+  ├─ TemporalToolExecutor (wraps ToolExecutionClient)
+  └─ Called by: @activity.defn anthropic_agents_run()
+
+direct_anthropic_agent.py (Direct wrapper)
+  ├─ DirectAnthropicAgent(AnthropicAgentCore)
+  │  ├─ execute_step(session, context) → {final_answer, continue_loop, tool_calls}
+  │  └─ Emits events to session
+  ├─ DirectToolExecutor (wraps DirectToolsExecutor)
+  └─ Called by: POST /api/v1/agents/{id}/execute-direct
+```
+
+## Benefits
+
+| Aspect | Benefit |
+|--------|---------|
+| **DRY** | ReAct loop, tool definitions, response parsing written once |
+| **Testability** | Test core in isolation (no Temporal, no HTTP mocking needed) |
+| **Maintainability** | Bug fixes in core apply to both execution modes automatically |
+| **Extensibility** | Add new framework = copy wrapper pattern, reuse core design |
+| **Consistency** | Both modes use identical tool logic and loop behavior |
+| **Parity** | Temporal and direct agents behave identically for same framework |
+
+## Execution Mode Differences
+
+| Aspect | Temporal | Direct |
+|--------|----------|--------|
+| **Tool Executor** | ToolExecutionClient (platform bridge) | DirectToolsExecutor (direct) |
+| **Governance** | Full HITL, cost metering, audit hooks | None (fast path) |
+| **State Management** | Workflow durable state (Temporal) | In-memory session (Redis optional) |
+| **Return Format** | AgentDecision dict | Step result with continue_loop flag |
+| **Iteration Model** | Single activity runs full loop | HTTP endpoint called per iteration |
+| **Event Streaming** | Via Temporal event emitters | Via SSE/WebSocket to client |
+
+This pattern applies to all frameworks: PydanticAI, OpenAI Agents, Google ADK, and future additions.
+
+## Framework-Specific Implementation Status
+
+### Anthropic SDK ✅ (Complete)
+- **Core**: `anthropic_agent_core.py` (AnthropicAgentCore) — 345 lines
+- **Temporal**: `anthropic_agent.py` (AnthropicTemporalAgent) — 248 lines
+- **Direct**: `direct_anthropic_agent.py` (DirectAnthropicAgent) — 103 lines
+- **Total**: 696 lines (vs. 1300+ without pattern)
+
+### PydanticAI ⏳ (Temporal Only - Refactor When Adding Direct)
+- **Status**: Only Temporal version exists (`pydantic_ai_agent.py`, 689 lines)
+- **Current Architecture**: Single file with `AgentToolRegistry` + `build_agent_with_tools`
+- **When Direct Execution Needed**: Apply core + wrapper pattern:
+  - Extract `AgentToolRegistry` and `build_agent_with_tools` into `pydantic_ai_agent_core.py`
+  - Keep Temporal specifics in `pydantic_ai_agent.py`
+  - Create `direct_pydantic_ai_agent.py` with event streaming
+  - Reason: PydanticAI uses SDK-managed loop (not manual), so architecture differs slightly from Anthropic
+
+### OpenAI Agents, Google ADK (Not Yet Implemented)
+- Placeholder for future multi-framework support
+- When implemented, follow the same core + wrapper pattern
+
+════════════════════════════════════════════════════════════════════════════════════════════
                         4-TIER CAPABILITY HIERARCHY
 ════════════════════════════════════════════════════════════════════════════════════════════
 

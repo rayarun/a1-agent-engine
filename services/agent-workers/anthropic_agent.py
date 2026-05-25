@@ -13,362 +13,236 @@
 # limitations under the License.
 
 """
-Anthropic Agent SDK adapter for A1 Agent Engine.
+Anthropic Agent SDK adapter for Temporal execution.
 
-Implements activity-contained multi-turn ReAct loop using Anthropic's SDK directly.
-No Temporal contrib plugin (none exists), so the full agent loop runs inside a single
-Temporal activity with durable retry semantics at the activity boundary.
+Thin wrapper around AnthropicAgentCore that handles Temporal-specific concerns:
+- HITL approval resumption via workflow signals
+- AgentDecision format for workflow state machine
+- Platform tool bridge with approval context
+
+The multi-turn ReAct loop logic is in AnthropicAgentCore (framework-agnostic).
 """
 
 import json
 import logging
-import os
-from typing import Any, Optional
+from typing import Optional
 
-import anthropic
+from anthropic_agent_core import AnthropicAgentCore
 from platform_tool_bridge import ToolExecutionClient
 
 logger = logging.getLogger(__name__)
 
 
+class AnthropicTemporalAgent:
+    """Temporal-specific wrapper around AnthropicAgentCore."""
+
+    def __init__(self, context: dict):
+        """
+        Initialize the Temporal wrapper.
+
+        Args:
+            context: Agent context (id, tenant, model, system_prompt, tools, etc.)
+        """
+        # Create core with platform tool bridge executor
+        tool_executor = TemporalToolExecutor(context)
+        self.core = AnthropicAgentCore(context, tool_executor)
+        self.context = context
+        self.approved_tool_use_ids = set()
+
+    async def execute_step(self, session: "AgentSession", context: dict) -> dict:
+        """
+        Execute one step of the ReAct loop (Temporal activity).
+
+        Handles:
+        - Resumption with approved HITL tools
+        - Detection of new HITL requests
+        - AgentDecision format for workflow state machine
+
+        Args:
+            session: Agent session with message history
+            context: Agent context
+
+        Returns:
+            AgentDecision dict for workflow
+        """
+        messages = session.messages
+
+        # Check for approved tools to resume with
+        approved_tools = context.get("approved_hitl_tools", {})
+        executed_tool_use_ids = context.get("_executed_tool_use_ids", set())
+
+        # If resuming with approved tool, execute it first
+        if approved_tools and messages:
+            for msg in messages:
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", [])
+                    blocks = content if isinstance(content, list) else [content]
+
+                    for block in blocks:
+                        block_type = (
+                            block.get("type")
+                            if isinstance(block, dict)
+                            else getattr(block, "type", None)
+                        )
+                        block_name = (
+                            block.get("name")
+                            if isinstance(block, dict)
+                            else getattr(block, "name", None)
+                        )
+                        block_id = (
+                            block.get("id", "")
+                            if isinstance(block, dict)
+                            else getattr(block, "id", "")
+                        )
+
+                        if block_type == "tool_use" and block_id not in executed_tool_use_ids:
+                            if block_name in approved_tools:
+                                logger.info(
+                                    f"[TEMPORAL] Executing approved tool: {block_name} (id={block_id})"
+                                )
+
+                                # Execute approved tool
+                                tool_input = (
+                                    block.get("input", {})
+                                    if isinstance(block, dict)
+                                    else getattr(block, "input", {})
+                                )
+                                approval_id = approved_tools[block_name]
+                                executor = TemporalToolExecutor(
+                                    context,
+                                    approved_hitl_tools={block_name: approval_id},
+                                )
+
+                                result_str = await executor.invoke(block_name, tool_input)
+                                result = (
+                                    json.loads(result_str)
+                                    if result_str.startswith("{")
+                                    else result_str
+                                )
+
+                                # Mark as executed
+                                if "_executed_tool_use_ids" not in context:
+                                    context["_executed_tool_use_ids"] = set()
+                                context["_executed_tool_use_ids"].add(block_id)
+
+                                # Add result to messages
+                                messages.append(
+                                    {
+                                        "role": "user",
+                                        "content": [
+                                            {
+                                                "type": "tool_result",
+                                                "tool_use_id": block_id,
+                                                "content": str(result),
+                                            }
+                                        ],
+                                    }
+                                )
+
+                                return {
+                                    "final_answer": None,
+                                    "tool_calls": [],
+                                    "messages_delta": messages,
+                                    "continue_loop": True,
+                                    "hitl_pending": False,
+                                }
+
+        # Run one iteration of core ReAct loop
+        result = await self.core.run_react_loop(messages)
+
+        # Map core result to Temporal AgentDecision format
+        if result["status"] == "completed":
+            return {
+                "final_answer": result["final_answer"],
+                "tool_calls": [],
+                "messages_delta": result["messages"],
+                "continue_loop": False,
+                "hitl_pending": False,
+                "tokens_in": result["tokens_in"],
+                "tokens_out": result["tokens_out"],
+            }
+
+        if result["status"] == "max_iterations":
+            return {
+                "final_answer": result["final_answer"],
+                "tool_calls": [],
+                "messages_delta": result["messages"],
+                "continue_loop": False,
+                "tokens_in": result["tokens_in"],
+                "tokens_out": result["tokens_out"],
+            }
+
+        if result["status"] == "error":
+            return {
+                "final_answer": None,
+                "tool_calls": [],
+                "messages_delta": result["messages"],
+                "continue_loop": False,
+                "error": result["error"],
+                "tokens_in": result["tokens_in"],
+                "tokens_out": result["tokens_out"],
+            }
+
+        return {
+            "final_answer": None,
+            "tool_calls": [],
+            "messages_delta": result["messages"],
+            "continue_loop": True,
+            "tokens_in": result["tokens_in"],
+            "tokens_out": result["tokens_out"],
+        }
+
+
+class TemporalToolExecutor:
+    """Tool executor for Temporal mode (uses ToolExecutionClient with platform bridge)."""
+
+    def __init__(self, context: dict, approved_hitl_tools: dict = None):
+        self.context = context
+        self.approved_hitl_tools = approved_hitl_tools or {}
+        self.client = ToolExecutionClient(
+            context.get("agent_id", "unknown"),
+            context.get("tenant_id", "default-tenant"),
+            approved_hitl_tools=self.approved_hitl_tools,
+        )
+
+    async def invoke(self, tool_name: str, tool_input: dict) -> str:
+        """Invoke tool via platform bridge."""
+        return await self.client.invoke_direct_tool(tool_name, "1.0.0", tool_input, mutating=True)
+
+
 async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] = None) -> dict:
     """
-    Build and run an Anthropic Agent SDK agent.
+    Build and run an Anthropic Agent SDK agent (Temporal entry point).
 
-    This is the entry point for activity-contained execution of Anthropic agents.
-    The full multi-turn loop runs here with HITL checkpoints.
+    Wrapper for backward compatibility with Temporal workflows.
+    Delegates to AnthropicTemporalAgent.
 
     Args:
-        context: Agent context (id, tenant, prompt, model, system_prompt, skills, tools)
-        messages: Existing message history (for HITL resumption). If None, starts fresh with prompt.
+        context: Agent context (id, tenant, model, system_prompt, tools, etc.)
+        messages: Existing message history (for HITL resumption)
 
     Returns:
         AgentDecision dict compatible with AgentWorkflow expectations
     """
-    logger.info(f"Building Anthropic agent {context.get('agent_id', 'unknown')}")
+    from models import AgentSession
 
-    # Set up client to use Anthropic API directly (bypass OpenAI-compat routing)
-    # Use configured endpoint from environment or fallback to standard Anthropic
-    anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
-
-    client = anthropic.AsyncAnthropic(
-        base_url=anthropic_base_url,
-        api_key=anthropic_api_key,
-    )
-
-    model = context.get('model', 'claude-opus-4-7')
-
-    # Build tool definitions from platform tools
-    tool_definitions = _build_tool_definitions(context)
+    logger.info(f"[TEMPORAL] Building Anthropic agent {context.get('agent_id', 'unknown')}")
 
     # Initialize or resume message history
     if messages is None or len(messages) == 0:
-        messages = [{"role": "user", "content": context.get('prompt', 'Help me')}]
+        messages = [{"role": "user", "content": context.get("prompt", "Help me")}]
     else:
-        # Filter out system role messages (Anthropic API doesn't accept them in messages array)
+        # Filter out system role messages (Anthropic API doesn't accept them)
         messages = [m for m in messages if m.get("role") != "system"]
 
-    tokens_in = 0
-    tokens_out = 0
+    # Create temporary session for compatibility
+    session = AgentSession(
+        id="temporal-session",
+        agent_id=context.get("agent_id", "unknown"),
+        tenant_id=context.get("tenant_id", "default-tenant"),
+        messages=messages,
+    )
 
-    # Multi-turn ReAct loop
-    max_iterations = context.get('max_iterations', 5)
-    for iteration in range(max_iterations):
-        logger.info(f"Iteration {iteration + 1}/{max_iterations}")
-
-        try:
-            # Check if resuming with an approved tool that needs execution
-            approved_tools = context.get('approved_hitl_tools', {})
-            executed_tool_use_ids = context.get('_executed_tool_use_ids', set())  # Track already-executed tools to avoid infinite loop
-            logger.info(f"[DEBUG] approved_hitl_tools in context: {approved_tools}")
-            logger.info(f"[DEBUG] executed_tool_use_ids: {executed_tool_use_ids}")
-            logger.info(f"[DEBUG] messages count: {len(messages)}")
-
-            found_approved = False
-            if approved_tools and messages:
-                logger.info(f"[DEBUG] Approved tools present: {list(approved_tools.keys())}")
-
-                for msg_idx, msg in enumerate(messages):
-                    msg_role = msg.get("role")
-                    logger.info(f"[DEBUG] Message {msg_idx}: role={msg_role}, type={type(msg)}")
-
-                    if msg_role == "assistant":
-                        logger.info(f"[DEBUG]   Found assistant message at index {msg_idx}")
-                        content = msg.get("content")
-                        logger.info(f"[DEBUG]   Content type: {type(content)}, is_list: {isinstance(content, list)}")
-
-                        if content:
-                            blocks = content if isinstance(content, list) else [content]
-                            logger.info(f"[DEBUG]   Blocks count: {len(blocks)}")
-
-                            for block_idx, block in enumerate(blocks):
-                                logger.info(f"[DEBUG]     Block {block_idx}: type={type(block)}")
-
-                                # Handle both dict and Anthropic SDK ContentBlock objects
-                                if isinstance(block, dict):
-                                    block_type = block.get("type")
-                                    block_name = block.get("name")
-                                    block_id = block.get("id", "")
-                                    logger.info(f"[DEBUG]       Dict block: type={block_type}, name={block_name}, id={block_id}")
-                                else:
-                                    block_type = getattr(block, "type", None)
-                                    block_name = getattr(block, "name", None)
-                                    block_id = getattr(block, "id", "")
-                                    logger.info(f"[DEBUG]       SDK block: type={block_type}, name={block_name}, id={block_id}")
-
-                                if block_type == "tool_use":
-                                    logger.info(f"[DEBUG]       Found tool_use: {block_name}, id={block_id}")
-                                    # Only execute if not already executed (prevent infinite loop)
-                                    if block_id in executed_tool_use_ids:
-                                        logger.info(f"[DEBUG]       Skipping tool_use {block_name} (id={block_id}) - already executed")
-                                        continue
-
-                                    if block_name in approved_tools:
-                                        logger.info(f"[APPROVED TOOL MATCH] tool={block_name}, id={block_id}, approval_id={approved_tools[block_name]}")
-                                        found_approved = True
-
-                                        # Execute the approved tool directly
-                                        if isinstance(block, dict):
-                                            tool_use_id = block.get("id")
-                                            tool_input = block.get("input", {})
-                                        else:
-                                            tool_use_id = getattr(block, "id", "")
-                                            tool_input = getattr(block, "input", {})
-
-                                        logger.info(f"[DEBUG] Executing tool={block_name}, id={tool_use_id}")
-                                        # Pass the approval context so platform tool bridge skips HITL for this execution
-                                        # The tool was already approved at the model layer; execution should not re-check HITL
-                                        approval_id = approved_tools[block_name]  # Get the approval_id from the approved_tools dict
-                                        tool_execution_client = ToolExecutionClient(
-                                            context.get('agent_id', 'unknown'),
-                                            context.get('tenant_id', 'default-tenant'),
-                                            approved_hitl_tools={block_name: approval_id}  # Pass approval_id to bypass HITL
-                                        )
-
-                                        try:
-                                            result_str = await tool_execution_client.invoke_direct_tool(
-                                                str(block_name), "1.0.0", tool_input, mutating=True
-                                            )
-
-                                            result = json.loads(result_str) if result_str.startswith("{") else result_str
-                                            logger.info(f"[TOOL RESULT] {block_name}: success")
-                                        except Exception as e:
-                                            logger.error(f"[TOOL ERROR] {block_name}: {e}")
-                                            result = {"error": str(e)}
-
-                                        # Mark this tool_use as executed to prevent re-execution
-                                        if '_executed_tool_use_ids' not in context:
-                                            context['_executed_tool_use_ids'] = set()
-                                        context['_executed_tool_use_ids'].add(tool_use_id)
-                                        logger.info(f"[DEBUG] Added {tool_use_id} to executed_tool_use_ids")
-
-                                        # Add tool result to messages
-                                        messages.append({
-                                            "role": "user",
-                                            "content": [
-                                                {
-                                                    "type": "tool_result",
-                                                    "tool_use_id": tool_use_id,
-                                                    "content": str(result),
-                                                }
-                                            ],
-                                        })
-                                        # DO NOT clear approved_hitl_tools here - let the workflow manage lifecycle
-                                        # This allows approved tools to be reused if the agent calls them again
-                                        # The workflow will clear them when HITL is not pending anymore
-                                        logger.info("[DEBUG] Approved tool executed, returning to workflow with tool result")
-                                        return {
-                                            "final_answer": None,
-                                            "tool_calls": [],
-                                            "messages_delta": messages,
-                                            "continue_loop": True,
-                                            "hitl_pending": False,
-                                            "tokens_in": tokens_in,
-                                            "tokens_out": tokens_out,
-                                        }
-
-                    # If we found and executed an approved tool, should have returned above
-                    if found_approved:
-                        logger.info("[DEBUG] Approved tool was marked found but return didn't execute - breaking")
-                        break
-            else:
-                logger.info(f"[DEBUG] No approved tools or no messages. approved_tools={bool(approved_tools)}, messages={len(messages) if messages else 0}")
-
-            # If we broke due to approved tool, don't call model
-            if found_approved:
-                logger.info("[DEBUG] Approved tool executed in iteration, returning")
-                return {
-                    "final_answer": None,
-                    "tool_calls": [],
-                    "messages_delta": messages,
-                    "continue_loop": True,
-                    "hitl_pending": False,
-                    "tokens_in": tokens_in,
-                    "tokens_out": tokens_out,
-                }
-
-            # Call Anthropic API
-            response = await client.messages.create(
-                model=model,
-                max_tokens=8192,
-                system=context.get('system_prompt', 'You are a helpful assistant'),
-                tools=tool_definitions,
-                messages=messages,
-            )
-
-            # Track tokens
-            if hasattr(response.usage, "input_tokens"):
-                tokens_in += response.usage.input_tokens
-            if hasattr(response.usage, "output_tokens"):
-                tokens_out += response.usage.output_tokens
-
-            logger.info(f"Response stop_reason: {response.stop_reason}")
-
-            # Check if agent has finished (end_turn)
-            if response.stop_reason == "end_turn":
-                final_answer = ""
-                for block in response.content:
-                    if hasattr(block, "text"):
-                        final_answer = block.text
-                        break
-                logger.info(f"Agent finished with answer: {final_answer[:100]}...")
-                return {
-                    "final_answer": final_answer,
-                    "tool_calls": [],
-                    "messages_delta": messages,
-                    "continue_loop": False,
-                    "hitl_pending": False,
-                    "tokens_in": tokens_in,
-                    "tokens_out": tokens_out,
-                }
-
-            # Process tool calls
-            if response.stop_reason == "tool_use":
-                # Add assistant message to history
-                messages.append({"role": "assistant", "content": response.content})
-
-                # Process each tool_use block
-                tool_results = []
-                tool_execution_client = ToolExecutionClient(context.get('agent_id', 'unknown'), context.get('tenant_id', 'default-tenant'))
-                hitl_pending = False
-                hitl_approval_id = None
-                hitl_tool_name = None
-                hitl_tool_args = None
-
-                for block in response.content:
-                    if block.type == "tool_use":
-                        tool_name = block.name
-                        tool_input = block.input or {}
-                        tool_use_id = block.id
-
-                        logger.info(f"Tool use: {tool_name}")
-
-                        # Invoke tool via platform bridge
-                        try:
-                            result_str = await tool_execution_client.invoke_direct_tool(
-                                tool_name, "1.0.0", tool_input, mutating=True
-                            )
-
-                            # Check for HITL marker
-                            if result_str.startswith("__HITL_PENDING__"):
-                                hitl_pending = True
-                                parts = result_str.split("::")
-                                if len(parts) >= 3:
-                                    hitl_approval_id = parts[1]
-                                    hitl_tool_name = parts[2]
-                                    hitl_tool_args = json.loads(parts[3]) if len(parts) > 3 else tool_input
-                                logger.info(f"HITL pending: {hitl_approval_id}")
-                                break
-                            result = json.loads(result_str) if result_str.startswith("{") else result_str
-                        except Exception as e:
-                            logger.error(f"Tool invocation failed: {e}")
-                            result = {"error": str(e)}
-
-                        tool_results.append({"type": "tool_result", "tool_use_id": tool_use_id, "content": json.dumps(result)})
-
-                if hitl_pending:
-                    # Return with HITL pending flag
-                    return {
-                        "final_answer": None,
-                        "tool_calls": [],
-                        "messages_delta": messages,
-                        "continue_loop": False,
-                        "hitl_pending": True,
-                        "hitl_approval_id": hitl_approval_id,
-                        "hitl_tool_name": hitl_tool_name,
-                        "hitl_tool_args": hitl_tool_args,
-                        "tokens_in": tokens_in,
-                        "tokens_out": tokens_out,
-                    }
-
-                # Add tool results to messages (Anthropic format)
-                for result in tool_results:
-                    messages.append({
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": result.get("tool_use_id", ""),
-                                "content": str(result.get("content", "")),
-                            }
-                        ],
-                    })
-                continue
-
-            # Unexpected stop reason
-            logger.warning(f"Unexpected stop_reason: {response.stop_reason}")
-            break
-
-        except Exception as e:
-            logger.error(f"Error in iteration {iteration + 1}: {e}", exc_info=True)
-            return {
-                "final_answer": None,
-                "tool_calls": [],
-                "messages_delta": messages,
-                "continue_loop": False,
-                "error": str(e),
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-            }
-
-    # Max iterations reached
-    return {
-        "final_answer": "Max iterations reached without completion",
-        "tool_calls": [],
-        "messages_delta": messages,
-        "continue_loop": False,
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out,
-    }
-
-
-def _build_tool_definitions(context: dict) -> list[dict]:
-    """
-    Convert platform tool specs to Anthropic tool definition format.
-
-    Anthropic tools are defined as dicts with:
-    - name: tool name (alphanumeric + underscores)
-    - description: human-readable
-    - input_schema: JSON Schema object for parameters
-    """
-    tools = []
-
-    # Add platform tools (system + manifest-specified + skills)
-    all_tools = list(context.get('system_tools', [])) + list(context.get('tools', []))
-
-    for tool_def in all_tools:
-        tool_name = tool_def.get("name", "").replace("-", "_").replace(".", "_")
-        tool_description = tool_def.get("description", f"Execute {tool_name} tool")
-        input_schema = tool_def.get("input_schema", {"type": "object", "properties": {}})
-
-        tools.append(
-            {
-                "name": tool_name,
-                "description": tool_description,
-                "input_schema": input_schema,
-            }
-        )
-
-    logger.info(f"Built {len(tools)} tool definitions for Anthropic")
-    return tools
+    # Run via wrapper
+    agent = AnthropicTemporalAgent(context)
+    return await agent.execute_step(session, context)

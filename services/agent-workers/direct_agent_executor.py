@@ -177,10 +177,6 @@ class DirectAgentExecutor:
                     "continue_loop": False,
                 }
 
-            if "tool_calls" in result:
-                for tool_call in result["tool_calls"]:
-                    session.add_event("tool_call", name=tool_call["name"])
-
             if "continue_loop" in result:
                 if not result["continue_loop"]:
                     session.state["finished"] = True  # Mark session as finished

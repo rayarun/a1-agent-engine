@@ -429,8 +429,11 @@ export default function ChatPage({
               if (event.type === "text" && event.content) {
                 return { ...m, content: m.content + event.content };
               }
-              if (event.type === "thinking" || event.type === "tool_call" || event.type === "approval") {
+              if (event.type === "thinking" || event.type === "tool_call" || event.type === "tool_result" || event.type === "approval" || event.type === "user_message") {
                 return { ...m, events: [...(m.events ?? []), event] };
+              }
+              if (event.type === "final_answer" && event.content) {
+                return { ...m, content: m.content + event.content };
               }
               if (event.type === "done") {
                 return { ...m, streaming: false };
@@ -446,7 +449,7 @@ export default function ChatPage({
             })
           );
 
-          if (event.type === "done" || event.type === "error") {
+          if (event.type === "done" || event.type === "error" || event.type === "final_answer") {
             if (timingId) {
               recordTiming(timingId, `Response complete: ${event.type}`);
               endTimingSession(timingId);
@@ -510,10 +513,14 @@ export default function ChatPage({
                       setMessages((prev) =>
                         prev.map((m) => {
                           if (m.id !== assistantId) return m;
+                          // Handle temporal/direct agent event types
                           if (event.type === "text" && event.content) {
                             return { ...m, content: m.content + event.content };
                           }
-                          if (event.type === "thinking" || event.type === "tool_call" || event.type === "approval") {
+                          if (event.type === "final_answer" && event.content) {
+                            return { ...m, content: m.content + event.content };
+                          }
+                          if (event.type === "thinking" || event.type === "tool_call" || event.type === "tool_result" || event.type === "approval" || event.type === "user_message") {
                             return { ...m, events: [...(m.events ?? []), event] };
                           }
                           if (event.type === "done") {
@@ -530,7 +537,7 @@ export default function ChatPage({
                         })
                       );
 
-                      if (event.type === "done" || event.type === "error") {
+                      if (event.type === "done" || event.type === "error" || event.type === "final_answer") {
                         if (timingId) {
                           recordTiming(timingId, `Response complete: ${event.type}`);
                           endTimingSession(timingId);

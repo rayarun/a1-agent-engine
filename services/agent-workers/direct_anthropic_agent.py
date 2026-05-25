@@ -14,77 +14,47 @@
 
 """
 Anthropic Agent SDK adapter for direct (non-Temporal) execution.
-Implements multi-turn ReAct loop directly in-process.
+
+Thin wrapper around AnthropicAgentCore that handles direct execution concerns:
+- HTTP/SSE event streaming
+- Session state management (in-memory)
+- Per-iteration execution (called multiple times for multi-turn loop)
+
+The multi-turn ReAct loop logic is in AnthropicAgentCore (framework-agnostic).
 """
 
-import json
 import logging
-import os
-from typing import Optional, Set
 
-import anthropic
-
+from anthropic_agent_core import AnthropicAgentCore
 from direct_tools_executor import DirectToolsExecutor
 
 logger = logging.getLogger(__name__)
 
 
 class DirectAnthropicAgent:
-    """Execute Anthropic agents directly without Temporal."""
+    """Direct execution wrapper around AnthropicAgentCore."""
 
     def __init__(self, context: dict):
+        """
+        Initialize the direct execution agent.
+
+        Args:
+            context: Agent context (id, tenant, model, system_prompt, tools, etc.)
+        """
+        # Create core with direct tool executor (bypasses Skill Dispatcher)
+        tool_executor = DirectToolExecutor()
+        self.core = AnthropicAgentCore(context, tool_executor)
         self.context = context
-        self.agent_id = context.get("agent_id", "unknown")
-        self.tenant_id = context.get("tenant_id", "default-tenant")
-        self.model = context.get("model", "claude-opus-4-7")
-        self.system_prompt = context.get("system_prompt", "You are a helpful assistant")
-        self.max_iterations = context.get("max_iterations", 5)
-        self.approved_tool_use_ids: Set[str] = set()  # Track approved tool calls to prevent re-asking
-
-        # Initialize Anthropic client (direct, no Temporal plugin)
-        anthropic_base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-        # Strip trailing /v1 if present (SDK adds it automatically)
-        if anthropic_base_url.endswith("/v1"):
-            anthropic_base_url = anthropic_base_url[:-3]
-        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
-        self.client = anthropic.AsyncAnthropic(
-            base_url=anthropic_base_url,
-            api_key=anthropic_api_key,
-        )
-
-        self.tools_executor = DirectToolsExecutor()
-
-    def _build_tool_definitions(self) -> list[dict]:
-        """Build Anthropic tool definitions from context tools."""
-        tools = []
-
-        # Add platform tools
-        all_tools = list(self.context.get("system_tools", [])) + list(
-            self.context.get("tools", [])
-        )
-
-        for tool_def in all_tools:
-            tool_name = tool_def.get("name", "").replace("-", "_").replace(".", "_")
-            tool_description = tool_def.get("description", f"Execute {tool_name} tool")
-            input_schema = tool_def.get("input_schema", {"type": "object", "properties": {}})
-
-            tools.append(
-                {
-                    "name": tool_name,
-                    "description": tool_description,
-                    "input_schema": input_schema,
-                }
-            )
-
-        logger.info(f"Built {len(tools)} tool definitions for direct Anthropic agent")
-        return tools
 
     async def execute_step(self, session: "AgentSession", context: dict) -> dict:
         """
-        Execute one step of the ReAct loop.
+        Execute one step of the ReAct loop (direct/HTTP mode).
+
+        Handles multi-iteration agent loop by running the core's ReAct loop
+        and emitting events to the session for streaming.
 
         Args:
-            session: Agent session with message history
+            session: Agent session with message history and event queue
             context: Agent context
 
         Returns:
@@ -94,120 +64,50 @@ class DirectAnthropicAgent:
                 "continue_loop": bool,
             }
         """
-        tool_definitions = self._build_tool_definitions()
-        messages = session.messages
 
-        # Call Anthropic API
-        try:
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=8192,
-                system=self.system_prompt,
-                tools=tool_definitions,
-                messages=messages,
-            )
-            logger.info(f"Anthropic API call: stop_reason={response.stop_reason}")
-        except Exception as e:
-            logger.error(f"Anthropic API error: {e}")
+        async def emit_event(event_type: str, **kwargs) -> None:
+            """Emit event to session for streaming."""
+            session.add_event(event_type, **kwargs)
+
+        # Run full ReAct loop with event callback
+        result = await self.core.run_react_loop(session.messages, iteration_callback=emit_event)
+
+        # Update session messages
+        session.messages = result["messages"]
+
+        # Emit final_answer event if complete
+        if result["status"] == "completed":
+            session.add_event("final_answer", content=result["final_answer"])
+            session.state["finished"] = True
             return {
-                "final_answer": None,
-                "tool_calls": [],
-                "continue_loop": False,
-                "error": str(e),
-            }
-
-        # Extract thinking blocks from response content and emit as events
-        for block in response.content:
-            if block.type == "thinking":
-                thinking_text = getattr(block, "thinking", "")
-                if thinking_text:
-                    session.add_event("thinking", content=thinking_text)
-
-        # Check if agent finished
-        if response.stop_reason == "end_turn":
-            final_answer = ""
-            for block in response.content:
-                if hasattr(block, "text"):
-                    final_answer = block.text
-                    break
-            logger.info(f"Agent finished with answer: {final_answer[:100]}...")
-            return {
-                "final_answer": final_answer,
-                "tool_calls": [],
+                "final_answer": result["final_answer"],
+                "tool_calls": result["tool_calls"],
                 "continue_loop": False,
             }
 
-        # Process tool calls
-        if response.stop_reason == "tool_use":
-            # Add assistant message to history
-            session.messages.append({"role": "assistant", "content": response.content})
-
-            # Process each tool_use block
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    tool_name = block.name
-                    tool_input = block.input or {}
-                    tool_use_id = block.id
-
-                    logger.info(f"Tool use: {tool_name}")
-
-                    # Skip tool execution if already approved in this session
-                    if tool_use_id in self.approved_tool_use_ids:
-                        logger.info(f"Tool {tool_name} (id={tool_use_id}) already approved, skipping re-approval")
-                        # Return empty result (tool already executed in approval phase)
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": json.dumps({"skipped": True, "reason": "Already approved and executed"}),
-                            }
-                        )
-                        continue
-
-                    # Invoke tool directly (no Skill Dispatcher)
-                    result_str = await self.tools_executor.invoke(tool_name, tool_input)
-                    result = (
-                        json.loads(result_str) if result_str.startswith("{") else result_str
-                    )
-
-                    tool_results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": json.dumps(result),
-                        }
-                    )
-
-                    session.add_event("tool_result", name=tool_name)
-
-            # Add tool results to messages
-            for result in tool_results:
-                session.messages.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": result.get("tool_use_id", ""),
-                                "content": str(result.get("content", "")),
-                            }
-                        ],
-                    }
-                )
-
+        # Mark session as finished if any terminal status
+        if result["status"] in ["error", "max_iterations"]:
+            session.state["finished"] = True
             return {
-                "final_answer": None,
-                "tool_calls": [
-                    {"name": t.name} for t in response.content if t.type == "tool_use"
-                ],
-                "continue_loop": True,
+                "final_answer": result.get("final_answer"),
+                "tool_calls": result.get("tool_calls", []),
+                "continue_loop": False,
             }
 
-        # Unexpected stop reason
-        logger.warning(f"Unexpected stop_reason: {response.stop_reason}")
+        # Continue loop (shouldn't reach here, but handle gracefully)
         return {
             "final_answer": None,
-            "tool_calls": [],
-            "continue_loop": False,
+            "tool_calls": result.get("tool_calls", []),
+            "continue_loop": True,
         }
+
+
+class DirectToolExecutor:
+    """Tool executor for direct mode (bypasses Skill Dispatcher, direct execution)."""
+
+    def __init__(self):
+        self.tools_executor = DirectToolsExecutor()
+
+    async def invoke(self, tool_name: str, tool_input: dict) -> str:
+        """Invoke tool directly (no platform bridge, no governance)."""
+        return await self.tools_executor.invoke(tool_name, tool_input)
