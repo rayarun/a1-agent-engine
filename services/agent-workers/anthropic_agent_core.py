@@ -208,50 +208,56 @@ class AnthropicAgentCore:
 
                 # Process tool calls
                 if response.stop_reason == "tool_use":
+                    logger.info(f"[LOOP] Got tool_use stop_reason, processing tools")
                     # Add assistant message to history
                     messages.append({"role": "assistant", "content": response.content})
 
                     # Process each tool_use block
                     tool_results = []
-                    for block in response.content:
-                        if block.type == "tool_use":
-                            tool_name = block.name
-                            tool_input = block.input or {}
-                            tool_use_id = block.id
+                    tool_blocks = [b for b in response.content if b.type == "tool_use"]
+                    logger.info(f"[LOOP] Found {len(tool_blocks)} tool blocks to execute")
 
-                            logger.info(f"[LOOP] Tool call: {tool_name}")
-                            result["tool_calls"].append({"name": tool_name, "input": tool_input})
+                    for block in tool_blocks:
+                        tool_name = block.name
+                        tool_input = block.input or {}
+                        tool_use_id = block.id
 
-                            # Emit tool_call event before execution
-                            if iteration_callback:
-                                await iteration_callback("tool_call", name=tool_name)
+                        logger.info(f"[LOOP] Executing tool: {tool_name} (id={tool_use_id})")
+                        result["tool_calls"].append({"name": tool_name, "input": tool_input})
 
-                            # Execute tool
-                            try:
-                                result_str = await self.tool_executor.invoke(tool_name, tool_input)
-                                result_obj = (
-                                    json.loads(result_str)
-                                    if result_str.startswith("{")
-                                    else result_str
-                                )
-                                logger.info(f"[LOOP] Tool result: {tool_name} success")
-                            except Exception as e:
-                                logger.error(f"[LOOP] Tool execution failed: {tool_name}: {e}")
-                                result_obj = {"error": str(e)}
+                        # Emit tool_call event before execution
+                        if iteration_callback:
+                            await iteration_callback("tool_call", name=tool_name)
 
-                            tool_results.append(
-                                {
-                                    "type": "tool_result",
-                                    "tool_use_id": tool_use_id,
-                                    "content": json.dumps(result_obj),
-                                }
+                        # Execute tool
+                        try:
+                            logger.info(f"[LOOP] Invoking tool_executor.invoke({tool_name}, ...)")
+                            result_str = await self.tool_executor.invoke(tool_name, tool_input)
+                            logger.info(f"[LOOP] Tool result received, length={len(result_str) if result_str else 0}")
+                            result_obj = (
+                                json.loads(result_str)
+                                if result_str.startswith("{")
+                                else result_str
                             )
+                            logger.info(f"[LOOP] Tool result: {tool_name} success")
+                        except Exception as e:
+                            logger.error(f"[LOOP] Tool execution failed: {tool_name}: {e}", exc_info=True)
+                            result_obj = {"error": str(e)}
 
-                            # Emit tool_result event
-                            if iteration_callback:
-                                await iteration_callback("tool_result", name=tool_name)
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": json.dumps(result_obj),
+                            }
+                        )
+
+                        # Emit tool_result event
+                        if iteration_callback:
+                            await iteration_callback("tool_result", name=tool_name)
 
                     # Add tool results to messages
+                    logger.info(f"[LOOP] Adding {len(tool_results)} tool results to messages")
                     for res in tool_results:
                         messages.append(
                             {
@@ -265,6 +271,7 @@ class AnthropicAgentCore:
                                 ],
                             }
                         )
+                    logger.info(f"[LOOP] Messages now has {len(messages)} entries, continuing to next iteration")
                     # Continue to next iteration
                     continue
 
