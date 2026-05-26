@@ -49,7 +49,7 @@ class AnthropicTemporalAgent:
         self.context = context
         self.approved_tool_use_ids = set()
 
-    async def execute_step(self, session: "AgentSession", context: dict) -> dict:
+    async def execute_step(self, session, context: dict) -> dict:
         """
         Execute one step of the ReAct loop (Temporal activity).
 
@@ -148,7 +148,9 @@ class AnthropicTemporalAgent:
                                 }
 
         # Run one iteration of core ReAct loop
+        logger.info(f"[TEMPORAL] Calling core.run_react_loop with {len(messages)} messages")
         result = await self.core.run_react_loop(messages)
+        logger.info(f"[TEMPORAL] Core returned status={result.get('status')}, error={result.get('error')}")
 
         # Map core result to Temporal AgentDecision format
         if result["status"] == "completed":
@@ -196,7 +198,7 @@ class AnthropicTemporalAgent:
 class TemporalToolExecutor:
     """Tool executor for Temporal mode (uses ToolExecutionClient with platform bridge)."""
 
-    def __init__(self, context: dict, approved_hitl_tools: dict = None):
+    def __init__(self, context: dict, approved_hitl_tools: Optional[dict] = None):
         self.context = context
         self.approved_hitl_tools = approved_hitl_tools or {}
         self.client = ToolExecutionClient(
@@ -224,25 +226,37 @@ async def build_anthropic_agent_and_run(context: dict, messages: Optional[list] 
     Returns:
         AgentDecision dict compatible with AgentWorkflow expectations
     """
-    from models import AgentSession
+    try:
+        logger.info(f"[TEMPORAL] Building Anthropic agent {context.get('agent_id', 'unknown')}")
 
-    logger.info(f"[TEMPORAL] Building Anthropic agent {context.get('agent_id', 'unknown')}")
+        # Initialize or resume message history
+        if messages is None or len(messages) == 0:
+            messages = [{"role": "user", "content": context.get("prompt", "Help me")}]
+        else:
+            # Filter out system role messages (Anthropic API doesn't accept them)
+            messages = [m for m in messages if m.get("role") != "system"]
 
-    # Initialize or resume message history
-    if messages is None or len(messages) == 0:
-        messages = [{"role": "user", "content": context.get("prompt", "Help me")}]
-    else:
-        # Filter out system role messages (Anthropic API doesn't accept them)
-        messages = [m for m in messages if m.get("role") != "system"]
+        logger.info(f"[TEMPORAL] Initialized {len(messages)} messages")
 
-    # Create temporary session for compatibility
-    session = AgentSession(
-        id="temporal-session",
-        agent_id=context.get("agent_id", "unknown"),
-        tenant_id=context.get("tenant_id", "default-tenant"),
-        messages=messages,
-    )
+        # Create minimal session-like object for compatibility with execute_step
+        class TemporalSession:
+            def __init__(self, msgs):
+                self.messages = msgs
 
-    # Run via wrapper
-    agent = AnthropicTemporalAgent(context)
-    return await agent.execute_step(session, context)
+        session = TemporalSession(messages)
+
+        # Run via wrapper
+        agent = AnthropicTemporalAgent(context)
+        logger.info(f"[TEMPORAL] Created agent, calling execute_step")
+        return await agent.execute_step(session, context)
+    except Exception as e:
+        logger.error(f"[TEMPORAL] Exception in build_anthropic_agent_and_run: {e}", exc_info=True)
+        return {
+            "final_answer": f"Error: {str(e)}",
+            "tool_calls": [],
+            "messages_delta": messages or [],
+            "continue_loop": False,
+            "error": str(e),
+            "tokens_in": 0,
+            "tokens_out": 0,
+        }
