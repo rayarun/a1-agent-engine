@@ -167,9 +167,11 @@ services:
     ports:
       - "8080:8080"
     environment:
+      - AGENT_REGISTRY_URL=http://agent-registry:8088
       - WORKFLOW_INITIATOR_URL=http://workflow-initiator:8081
       - WORKFLOW_SERVICE_URL=http://workflow-service:8094
     depends_on:
+      - agent-registry
       - workflow-initiator
       - workflow-service
     networks:
