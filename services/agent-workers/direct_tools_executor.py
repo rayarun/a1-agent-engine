@@ -82,16 +82,40 @@ class DirectToolsExecutor:
 
     async def _web_search(self, query: str) -> str:
         """Execute web search directly (no Skill Dispatcher)."""
+        logger.info(f"[WEB_SEARCH] Starting search for query: '{query}'")
+        if not query or not query.strip():
+            logger.warning("[WEB_SEARCH] Empty query provided")
+            return json.dumps({"error": "Search query cannot be empty"})
+
         try:
             async with aiohttp.ClientSession() as session:
                 # Use DuckDuckGo JSON endpoint (no API key required)
                 url = "https://duckduckgo.com/"
                 params = {"q": query, "format": "json"}
+                headers = {"User-Agent": "Mozilla/5.0 (compatible; bot/1.0)"}
+
+                logger.info(f"[WEB_SEARCH] Calling DuckDuckGo: {url}?q={query}")
                 async with session.get(
-                    url, params=params, timeout=aiohttp.ClientTimeout(total=10)
+                    url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
                 ) as resp:
+                    logger.info(f"[WEB_SEARCH] Got response: status={resp.status}, content-type={resp.content_type}")
                     if resp.status == 200:
-                        data = await resp.json()
+                        try:
+                            # Try JSON parsing first; DuckDuckGo sometimes returns application/x-javascript
+                            data = await resp.json()
+                            logger.info(f"[WEB_SEARCH] Successfully parsed JSON response")
+                        except (json.JSONDecodeError, ValueError) as e:
+                            # Fall back to text parsing if JSON fails
+                            logger.warning(f"[WEB_SEARCH] JSON parsing failed: {e}, trying text fallback")
+                            text = await resp.text()
+                            logger.info(f"[WEB_SEARCH] Response text length: {len(text)}")
+                            try:
+                                data = json.loads(text)
+                                logger.info(f"[WEB_SEARCH] Text fallback JSON parsing succeeded")
+                            except json.JSONDecodeError as e:
+                                logger.error(f"[WEB_SEARCH] Failed to parse DuckDuckGo response: {e}")
+                                return json.dumps({"error": "Invalid search response format"})
+
                         # Extract results from DuckDuckGo response
                         results = []
                         for item in data.get("Results", [])[:5]:
@@ -102,13 +126,16 @@ class DirectToolsExecutor:
                                     "snippet": item.get("Text", ""),
                                 }
                             )
+                        logger.info(f"[WEB_SEARCH] Success: query='{query}', found {len(results)} results")
                         return json.dumps({"results": results, "query": query})
                     else:
+                        logger.error(f"[WEB_SEARCH] HTTP error: {resp.status}")
                         return json.dumps({"error": f"HTTP {resp.status}"})
         except asyncio.TimeoutError:
+            logger.error("[WEB_SEARCH] Search timed out")
             return json.dumps({"error": "Search timed out"})
         except Exception as e:
-            logger.error(f"Web search failed: {e}")
+            logger.error(f"[WEB_SEARCH] Exception: {e}", exc_info=True)
             return json.dumps({"error": str(e)})
 
     async def _kg_search(self, query: str) -> str:
