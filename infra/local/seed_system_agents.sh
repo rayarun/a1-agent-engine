@@ -152,8 +152,10 @@ fi
 echo ""
 echo "[2/3] Seeding system agents from YAML files..."
 
-# Seed agents using a Python helper for clean YAML parsing
-python3 << 'SEED_AGENTS_SCRIPT'
+# Seed agents using a Python helper for clean YAML parsing.
+# Export the shell vars so the Python block targets the right registry/source
+# (it reads these from the environment, not the shell).
+AGENTS_SOURCE="$AGENTS_SOURCE" AGENT_REGISTRY="$AGENT_REGISTRY" TENANT="$TENANT" python3 << 'SEED_AGENTS_SCRIPT'
 import yaml
 import subprocess
 import json

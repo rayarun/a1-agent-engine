@@ -296,7 +296,9 @@ services:
   # System Agent Seeder (one-shot)
   # ------------------------------------
   seed-system-agents:
-    image: curlimages/curl:latest
+    # Reuse the agent-workers image: the seed script needs bash + python3 +
+    # PyYAML + curl (the curlimages/curl image has none of these).
+    image: local-agent-workers
     container_name: seed-system-agents
     depends_on:
       agent-registry:
