@@ -1,12 +1,21 @@
-FROM golang:1.21 AS builder
+FROM golang:alpine AS builder
+
+# Use http:// for apk to bypass Zscaler TLS interception, then install certs
+RUN sed -i 's/https/http/g' /etc/apk/repositories && \
+    apk update && apk add --no-cache ca-certificates git
+COPY zscaler.pem /usr/local/share/ca-certificates/zscaler.crt
+RUN update-ca-certificates
 
 WORKDIR /app
 
-COPY services/bash-executor/go.mod services/bash-executor/go.sum* ./
-RUN go mod download 2>/dev/null || true
+# Copy shared packages (bash-executor depends on webhook-security via replace)
+COPY packages ./packages
 
-COPY services/bash-executor/ ./
+# Copy service code
+COPY services/bash-executor ./services/bash-executor
 
+WORKDIR /app/services/bash-executor
+RUN GOPROXY=https://proxy.golang.org,direct go mod download
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /bash-executor main.go
 
 FROM debian:bookworm-slim
