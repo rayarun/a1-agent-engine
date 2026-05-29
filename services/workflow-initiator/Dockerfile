@@ -15,7 +15,7 @@ COPY packages ./packages
 COPY services/workflow-initiator ./services/workflow-initiator
 
 WORKDIR /app/services/workflow-initiator
-RUN GOPROXY=direct go mod download
+RUN GOPROXY=https://proxy.golang.org,direct go mod download
 RUN go build -o /workflow-initiator main.go
 
 # --- Final Stage ---

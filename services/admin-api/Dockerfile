@@ -18,7 +18,7 @@ COPY packages ./packages
 COPY services/admin-api ./services/admin-api
 
 WORKDIR /app/services/admin-api
-RUN GOPROXY=direct go mod download
+RUN GOPROXY=https://proxy.golang.org,direct go mod download
 RUN go build -o /admin-api main.go
 
 # --- Final Stage ---

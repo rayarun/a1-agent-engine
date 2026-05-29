@@ -2,6 +2,8 @@ module github.com/agent-platform/hook-engine
 
 go 1.23
 
+toolchain go1.26.3
+
 require github.com/stretchr/testify v1.9.0
 
 require (

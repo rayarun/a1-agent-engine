@@ -1,5 +1,7 @@
 go 1.25.4
 
+toolchain go1.26.3
+
 use (
 	./packages/go-shared
 	./packages/hook-engine
@@ -7,6 +9,7 @@ use (
 	./services/admin-api
 	./services/agent-registry
 	./services/api-gateway
+	./services/bash-executor
 	./services/kg-service
 	./services/mcp-registry
 	./services/mcp-server
@@ -16,4 +19,5 @@ use (
 	./services/sub-agent-registry
 	./services/tool-registry
 	./services/workflow-initiator
+	./services/workflow-service
 )

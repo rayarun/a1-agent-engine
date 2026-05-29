@@ -2,6 +2,8 @@ module github.com/agent-platform/kg-service
 
 go 1.23
 
+toolchain go1.26.3
+
 require (
 	github.com/lib/pq v1.10.9
 	github.com/pgvector/pgvector-go v0.1.1

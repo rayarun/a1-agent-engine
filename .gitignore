@@ -28,6 +28,7 @@ ENV/
 *.dylib
 *.test
 *.out
+services/workflow-service/workflow-service
 
 # OS
 .DS_Store
@@ -59,3 +60,6 @@ SCREENSHOT_MAPPINGS.md
 SCREENSHOTS_INDEX.md
 infra/local/temporal_data/
 infra/local/litellm_config/config.yaml
+
+# Scan / audit reports (generated locally, not in version control)
+reports/

@@ -2,10 +2,12 @@ module github.com/agent-platform/admin-api
 
 go 1.24.0
 
+toolchain go1.26.3
+
 require (
 	github.com/agent-platform/go-shared v0.0.0
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.5.0
+	github.com/jackc/pgx/v5 v5.5.4
 	go.temporal.io/sdk v1.42.0
 	gopkg.in/yaml.v3 v3.0.1
 )

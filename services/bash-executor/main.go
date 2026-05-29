@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/agent-platform/bash-executor/pkg/executor"
+	hmacpkg "github.com/agent-platform/webhook-security/pkg/hmac"
+	"github.com/agent-platform/webhook-security/pkg/middleware"
 )
 
 const defaultPort = "8092"
@@ -62,16 +64,32 @@ func main() {
 		MaxOutputBytes:    maxOutputBytes,
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", handleHealth)
-	mux.HandleFunc("/api/v1/execute", handleExecute(exec))
+	// HMAC authentication on the execution endpoint. The shared middleware skips
+	// validation only when WEBHOOK_HMAC_DISABLED=true (local dev only).
+	hmacSecret := []byte(os.Getenv("WEBHOOK_HMAC_SECRET"))
+	if len(hmacSecret) == 0 {
+		hmacSecret = []byte("dev-secret")
+	}
+	authMW := middleware.ValidateHMAC(
+		hmacpkg.New(300),
+		func(_ *http.Request) ([]byte, error) { return hmacSecret, nil },
+	)
 
 	addr := ":" + port
 	log.Printf("Starting Bash Executor on %s (memory: %dMB, cpu: %d cores, timeout: %ds)",
 		addr, maxMemoryMB, maxCPUCores, maxTimeoutSeconds)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, newRouter(exec, authMW)); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+// newRouter builds the HTTP mux. The execute endpoint is wrapped with the supplied
+// auth middleware; /health is left unauthenticated for liveness probes.
+func newRouter(exec *executor.BashExecutor, authMW func(http.Handler) http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", handleHealth)
+	mux.Handle("/api/v1/execute", authMW(handleExecute(exec)))
+	return mux
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +116,20 @@ func handleExecute(exec *executor.BashExecutor) http.HandlerFunc {
 
 		if req.Script == "" {
 			http.Error(w, "script is required", http.StatusBadRequest)
+			return
+		}
+
+		// Security validation (allowlist + sandbox confinement) → 400 on rejection.
+		if err := executor.ValidateScript(req.Script); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := executor.ValidateExecutionID(req.ExecutionID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := executor.ValidateWorkingDir(req.WorkingDir); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
