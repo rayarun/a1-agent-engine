@@ -61,6 +61,7 @@ type TemporalClient interface {
 	DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*workflowservice.DescribeWorkflowExecutionResponse, error)
 	QueryWorkflow(ctx context.Context, workflowID, runID, queryType string, args ...interface{}) (EncodedQueryValue, error)
 	SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg interface{}) error
+	TerminateWorkflow(ctx context.Context, workflowID, runID, reason string, details ...interface{}) error
 }
 
 // realTemporalClient wraps the Temporal SDK client to satisfy TemporalClient.
@@ -80,6 +81,10 @@ func (r *realTemporalClient) QueryWorkflow(ctx context.Context, workflowID, runI
 
 func (r *realTemporalClient) SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg interface{}) error {
 	return r.c.SignalWorkflow(ctx, workflowID, runID, signalName, arg)
+}
+
+func (r *realTemporalClient) TerminateWorkflow(ctx context.Context, workflowID, runID, reason string, details ...interface{}) error {
+	return r.c.TerminateWorkflow(ctx, workflowID, runID, reason, details...)
 }
 
 var temporalClient TemporalClient
@@ -309,6 +314,29 @@ func HandleGetSessionStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// HandleTerminateSession terminates a running AgentWorkflow so a stuck or
+// looping chat session can be stopped from the UI. Idempotent from the
+// caller's perspective: terminating an already-finished workflow is harmless.
+func HandleTerminateSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "workflow id is required", http.StatusBadRequest)
+		return
+	}
+	if temporalClient == nil {
+		http.Error(w, "Temporal client not connected", http.StatusServiceUnavailable)
+		return
+	}
+
+	if err := temporalClient.TerminateWorkflow(context.Background(), id, "", "stopped by user"); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to terminate workflow: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(models.SessionStatus{WorkflowID: id, Status: "TERMINATED"})
 }
 
 // HandleGetSessionEvents queries the workflow for its accumulated events list and

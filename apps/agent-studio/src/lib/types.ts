@@ -129,7 +129,7 @@ export interface TransitionRequest {
 }
 
 export interface ChatEvent {
-  type: "thinking" | "tool_call" | "tool_result" | "text" | "error" | "done" | "approval";
+  type: "thinking" | "tool_call" | "tool_result" | "text" | "error" | "done" | "approval" | "session" | "final_answer" | "user_message";
   content?: string;
   tool_name?: string;
   tool_args?: unknown;
@@ -137,6 +137,7 @@ export interface ChatEvent {
   timestamp?: string;
   approval_id?: string;
   reason?: string;
+  workflow_id?: string;
 }
 
 export interface Message {

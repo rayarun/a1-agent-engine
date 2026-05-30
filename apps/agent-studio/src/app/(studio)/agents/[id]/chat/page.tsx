@@ -20,6 +20,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Send,
+  Square,
   Loader2,
   ChevronDown,
   ChevronRight,
@@ -339,6 +340,10 @@ export default function ChatPage({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Workflow backing the in-flight stream (sent by the gateway as a "session"
+  // event) and the SSE abort handle — both used to stop a session.
+  const workflowIdRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const { data: agent } = useQuery({
     queryKey: ["agents", id],
@@ -413,6 +418,12 @@ export default function ChatPage({
           const event: ChatEvent = JSON.parse(e.data);
           if (timingId && event.type !== "text") recordTiming(timingId, `Event received: ${event.type}`);
 
+          // Capture the backing workflow id so Stop/New Chat can terminate it.
+          if (event.type === "session") {
+            if (event.workflow_id) workflowIdRef.current = event.workflow_id;
+            return;
+          }
+
           // Debug: log approval events
           if (event.type === "approval") {
             console.log("[WS_MESSAGE] Raw event data:", e.data);
@@ -479,6 +490,9 @@ export default function ChatPage({
       console.log("Using SSE fallback");
       const sseURL = `${API_GATEWAY}/api/v1/agents/${id}/chat`;
 
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       // Send initial message via POST to start streaming
       fetch(sseURL, {
         method: "POST",
@@ -487,6 +501,7 @@ export default function ChatPage({
           "X-Tenant-ID": tenantId,
         },
         body: JSON.stringify({ message: text, tenant_id: tenantId }),
+        signal: controller.signal,
       })
         .then((resp) => {
           if (timingId) recordTiming(timingId, "SSE response received");
@@ -509,6 +524,12 @@ export default function ChatPage({
                     try {
                       const event: ChatEvent = JSON.parse(line.slice(6));
                       if (timingId && event.type !== "text") recordTiming(timingId, `Event received: ${event.type}`);
+
+                      // Capture the backing workflow id for Stop/New Chat.
+                      if (event.type === "session") {
+                        if (event.workflow_id) workflowIdRef.current = event.workflow_id;
+                        continue;
+                      }
 
                       setMessages((prev) =>
                         prev.map((m) => {
@@ -552,6 +573,8 @@ export default function ChatPage({
                 }
               }
             } catch (err) {
+              // Deliberate stop (Stop/New Chat) — not an error.
+              if (err instanceof DOMException && err.name === "AbortError") return;
               if (timingId) recordTiming(timingId, `SSE stream error: ${err}`);
               console.error("SSE stream error:", err);
               setMessages((prev) =>
@@ -575,6 +598,8 @@ export default function ChatPage({
           processStream();
         })
         .catch((err) => {
+          // Deliberate stop (Stop/New Chat) — not an error.
+          if (err instanceof DOMException && err.name === "AbortError") return;
           if (timingId) {
             recordTiming(timingId, `SSE setup error: ${err}`);
             endTimingSession(timingId);
@@ -596,6 +621,31 @@ export default function ChatPage({
     },
     [id, tenantId]
   );
+
+  // Stop an in-flight session: abort the client stream, terminate the backend
+  // Temporal workflow so it stops looping/holding, and re-enable the input.
+  const stopStreaming = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    wsRef.current?.close();
+    wsRef.current = null;
+
+    const wfId = workflowIdRef.current;
+    if (wfId) {
+      fetch(`${API_GATEWAY}/api/v1/sessions/${wfId}/terminate`, {
+        method: "POST",
+        headers: { "X-Tenant-ID": tenantId },
+      }).catch(() => {});
+      workflowIdRef.current = null;
+    }
+
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.streaming ? { ...m, streaming: false, content: m.content || "_(stopped)_" } : m
+      )
+    );
+    setStreaming(false);
+  }, [tenantId]);
 
   const sendMessage = useCallback(() => {
     const text = input.trim();
@@ -684,9 +734,9 @@ export default function ChatPage({
           size="sm"
           className="h-7 px-2 text-muted-foreground"
           onClick={() => {
+            stopStreaming();
             clearSession(id);
             setMessages([]);
-            wsRef.current?.close();
           }}
         >
           New Chat
@@ -750,12 +800,13 @@ export default function ChatPage({
             />
             <Button
               size="sm"
-              onClick={sendMessage}
-              disabled={!input.trim() || streaming || agent?.status !== "active"}
+              onClick={streaming ? stopStreaming : sendMessage}
+              disabled={streaming ? false : (!input.trim() || agent?.status !== "active")}
               className="absolute bottom-3 right-3 h-7 w-7 p-0"
+              title={streaming ? "Stop" : "Send"}
             >
               {streaming ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Square className="h-3 w-3" />
               ) : (
                 <Send className="h-3.5 w-3.5" />
               )}

@@ -51,6 +51,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/sessions/{id}", service.HandleGetSessionStatus)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/events", service.HandleGetSessionEvents)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/poll", service.HandlePollSession)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/terminate", service.HandleTerminateSession)
 
 	// HITL Approval endpoints
 	mux.HandleFunc("POST /api/v1/approvals", service.HandleStoreHITLApproval)

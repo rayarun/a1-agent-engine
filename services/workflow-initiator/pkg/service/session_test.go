@@ -52,6 +52,14 @@ func (m *MockTemporalClient) QueryWorkflow(ctx context.Context, workflowID, runI
 	return nil, callArgs.Error(1)
 }
 
+func (m *MockTemporalClient) SignalWorkflow(ctx context.Context, workflowID, runID, signalName string, arg interface{}) error {
+	return m.Called(ctx, workflowID, runID, signalName, arg).Error(0)
+}
+
+func (m *MockTemporalClient) TerminateWorkflow(ctx context.Context, workflowID, runID, reason string, details ...interface{}) error {
+	return m.Called(ctx, workflowID, runID, reason).Error(0)
+}
+
 // MockWorkflowRun mocks the result of ExecuteWorkflow.
 type MockWorkflowRun struct {
 	mock.Mock
@@ -150,6 +158,42 @@ func TestGetSessionStatus_Running(t *testing.T) {
 	json.NewDecoder(rr.Body).Decode(&resp)
 	assert.Equal(t, "RUNNING", resp.Status)
 	assert.Equal(t, "wf-xyz", resp.WorkflowID)
+}
+
+func TestTerminateSession(t *testing.T) {
+	mockClient := new(MockTemporalClient)
+	mockClient.On("TerminateWorkflow", mock.Anything, "wf-term", "", mock.Anything).Return(nil)
+
+	SetTemporalClient(mockClient)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/sessions/{id}/terminate", HandleTerminateSession)
+
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/sessions/wf-term/terminate", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp models.SessionStatus
+	json.NewDecoder(rr.Body).Decode(&resp)
+	assert.Equal(t, "TERMINATED", resp.Status)
+	assert.Equal(t, "wf-term", resp.WorkflowID)
+	mockClient.AssertExpectations(t)
+}
+
+func TestTerminateSession_MissingID(t *testing.T) {
+	mockClient := new(MockTemporalClient)
+	SetTemporalClient(mockClient)
+
+	// Empty id path value -> 400, and Temporal is never called.
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/sessions//terminate", nil)
+	req.SetPathValue("id", "")
+	rr := httptest.NewRecorder()
+	http.HandlerFunc(HandleTerminateSession).ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+	mockClient.AssertNotCalled(t, "TerminateWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestGetSessionStatus_Completed(t *testing.T) {

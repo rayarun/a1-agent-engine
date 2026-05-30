@@ -174,6 +174,37 @@ func (h *GatewayHandler) HandleGetSessionStatus(w http.ResponseWriter, r *http.R
 	json.NewEncoder(w).Encode(status)
 }
 
+// HandleTerminateSession proxies a session-terminate request to the Workflow
+// Initiator so a stuck or looping chat session can be stopped from the UI.
+func (h *GatewayHandler) HandleTerminateSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "workflow id is required", http.StatusBadRequest)
+		return
+	}
+
+	req, err := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("%s/api/v1/sessions/%s/terminate", h.InitiatorURL, id), nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to build request: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if tenant := r.Header.Get("X-Tenant-ID"); tenant != "" {
+		req.Header.Set("X-Tenant-ID", tenant)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to call initiator: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
 // HandleChatStream starts an agent workflow for the given agent ID and streams
 // its events back to the caller as Server-Sent Events.
 // Supports both GET (query params) and POST (JSON body) for message input.
@@ -259,6 +290,8 @@ func (h *GatewayHandler) HandleChatStream(w http.ResponseWriter, r *http.Request
 
 	// Commit headers immediately so the client sees the stream open.
 	fmt.Fprintf(w, ": connected\n\n")
+	// Tell the client which workflow backs this stream so it can stop it.
+	fmt.Fprintf(w, "data: {\"type\":\"session\",\"workflow_id\":%q}\n\n", session.WorkflowID)
 	flusher.Flush()
 
 	poll := &http.Client{Timeout: 120 * time.Second}
@@ -394,6 +427,9 @@ func (h *GatewayHandler) HandleChatWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusInternalError, "")
 		return
 	}
+
+	// Tell the client which workflow backs this stream so it can stop it.
+	wsjson.Write(r.Context(), conn, map[string]string{"type": "session", "workflow_id": session.WorkflowID})
 
 	poll := &http.Client{Timeout: 5 * time.Second}
 	cursor := 0
