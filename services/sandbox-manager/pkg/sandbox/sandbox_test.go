@@ -26,25 +26,41 @@ import (
 // They run without a Docker daemon because the config builders are pure.
 
 func TestBuildContainerConfig_RunsAsNonRoot(t *testing.T) {
-	cfg := buildContainerConfig("print('hi')")
+	for _, lang := range []string{"python", "bash"} {
+		cfg := buildContainerConfig("echo hi", lang)
 
-	require.NotNil(t, cfg)
-	assert.NotEmpty(t, cfg.User, "sandbox must declare an explicit non-root user")
-	assert.NotEqual(t, "root", cfg.User)
-	assert.NotEqual(t, "0", cfg.User)
-	assert.NotEqual(t, "0:0", cfg.User)
+		require.NotNil(t, cfg)
+		assert.NotEmpty(t, cfg.User, "sandbox must declare an explicit non-root user (%s)", lang)
+		assert.NotEqual(t, "root", cfg.User)
+		assert.NotEqual(t, "0", cfg.User)
+		assert.NotEqual(t, "0:0", cfg.User)
+	}
 }
 
-func TestBuildContainerConfig_PassesCodeUnmodified(t *testing.T) {
+func TestBuildContainerConfig_PythonCommand(t *testing.T) {
 	code := "import sys; print(sys.version)"
-	cfg := buildContainerConfig(code)
+	cfg := buildContainerConfig(code, "python")
 
 	assert.Equal(t, []string{"python", "-c", code}, []string(cfg.Cmd))
 	assert.False(t, cfg.Tty)
 }
 
+func TestBuildContainerConfig_BashCommand(t *testing.T) {
+	script := "grep -i error /tmp/app.log | sort"
+	cfg := buildContainerConfig(script, "bash")
+
+	assert.Equal(t, []string{"bash", "-c", script}, []string(cfg.Cmd))
+	assert.False(t, cfg.Tty)
+}
+
+func TestBuildContainerConfig_DefaultsToPython(t *testing.T) {
+	// Unknown/empty language must default to python for backward compatibility.
+	cfg := buildContainerConfig("print(1)", "")
+	assert.Equal(t, []string{"python", "-c", "print(1)"}, []string(cfg.Cmd))
+}
+
 func TestBuildContainerConfig_UsesSupportedImage(t *testing.T) {
-	cfg := buildContainerConfig("print(1)")
+	cfg := buildContainerConfig("print(1)", "python")
 
 	// python:3.10 is EOL; the sandbox must track a supported release.
 	assert.False(t, strings.HasPrefix(cfg.Image, "python:3.10"),

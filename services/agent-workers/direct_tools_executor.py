@@ -20,10 +20,16 @@ Bypasses Skill Dispatcher for speed; tool invocation is direct and local.
 import asyncio
 import json
 import logging
+import os
 
 import aiohttp
 
 logger = logging.getLogger(__name__)
+
+
+def build_sandbox_payload(code: str, language: str = "bash") -> dict:
+    """Request body for sandbox-manager's /api/v1/execute."""
+    return {"code": code, "language": language}
 
 
 def parse_ddg_payload(data: dict) -> list:
@@ -86,6 +92,11 @@ class DirectToolsExecutor:
     def __init__(self):
         self.kg_service_url = "http://localhost:8084"  # Knowledge graph service
         self.web_search_engine = "duckduckgo"  # Web search backend
+        # Bash runs in the hardened sandbox-manager, never as a local subprocess.
+        # By convention this env var is the FULL execute endpoint URL.
+        self.sandbox_manager_url = os.getenv(
+            "SANDBOX_MANAGER_URL", "http://localhost:8082/api/v1/execute"
+        )
 
     async def invoke(self, tool_name: str, args: dict) -> str:
         """
@@ -116,21 +127,31 @@ class DirectToolsExecutor:
             return json.dumps({"error": str(e)})
 
     async def _bash(self, command: str) -> str:
-        """Execute bash command directly (no approval checks)."""
+        """Execute bash in the hardened sandbox-manager (not on the worker).
+
+        Direct mode bypasses Temporal for durability/governance only; the bash
+        script still runs in the isolated, non-root, network-isolated sandbox
+        container — never as a local subprocess on the agent-worker.
+        """
+        if not command or not command.strip():
+            return json.dumps({"error": "Command cannot be empty"})
         try:
-            process = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                return json.dumps({"error": "Command timed out after 30 seconds"})
-            output = stdout.decode() or stderr.decode()
-            return json.dumps({"output": output, "return_code": process.returncode})
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.sandbox_manager_url,
+                    json=build_sandbox_payload(command, "bash"),
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as resp:
+                    text = await resp.text()
+                    if resp.status != 200:
+                        return json.dumps({"error": f"sandbox returned HTTP {resp.status}", "detail": text[:500]})
+                    try:
+                        data = json.loads(text)
+                    except (json.JSONDecodeError, ValueError):
+                        return json.dumps({"error": "invalid sandbox response"})
+                    return json.dumps({"output": data.get("result", "")})
+        except asyncio.TimeoutError:
+            return json.dumps({"error": "Command timed out"})
         except Exception as e:
             return json.dumps({"error": str(e)})
 

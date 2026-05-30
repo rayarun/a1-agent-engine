@@ -43,12 +43,22 @@ type Executor struct {
 	cli *client.Client
 }
 
+// commandFor returns the container entrypoint command for the given language.
+// bash and python both ship in the python:3.13-slim (Debian) base image, so a
+// single hardened container serves both. Unknown/empty defaults to python.
+func commandFor(language, code string) []string {
+	if language == "bash" {
+		return []string{"bash", "-c", code}
+	}
+	return []string{"python", "-c", code}
+}
+
 // buildContainerConfig builds the container.Config for a sandbox run. Kept pure
 // (no Docker calls) so the security posture can be unit-tested.
-func buildContainerConfig(code string) *container.Config {
+func buildContainerConfig(code, language string) *container.Config {
 	return &container.Config{
 		Image: sandboxImage,
-		Cmd:   []string{"python", "-c", code},
+		Cmd:   commandFor(language, code),
 		Tty:   false,
 		User:  sandboxUser,
 	}
@@ -90,6 +100,12 @@ func NewExecutor() (*Executor, error) {
 
 // ExecutePython executes an arbitrary Python string in a sandbox.
 func (e *Executor) ExecutePython(ctx context.Context, code string) (string, error) {
+	return e.Execute(ctx, code, "python")
+}
+
+// Execute runs code in the hardened sandbox using the given language
+// ("python" or "bash"). Both run in the same locked-down container.
+func (e *Executor) Execute(ctx context.Context, code, language string) (string, error) {
 	// 1. Ensure image is present
 	reader, err := e.cli.ImagePull(ctx, sandboxImage, image.PullOptions{})
 	if err != nil {
@@ -99,7 +115,7 @@ func (e *Executor) ExecutePython(ctx context.Context, code string) (string, erro
 	reader.Close()
 
 	// 2. Create container with hardened resource limits and isolation
-	resp, err := e.cli.ContainerCreate(ctx, buildContainerConfig(code), buildHostConfig(), nil, nil, "")
+	resp, err := e.cli.ContainerCreate(ctx, buildContainerConfig(code, language), buildHostConfig(), nil, nil, "")
 	if err != nil {
 		return "", fmt.Errorf("failed to create container: %w", err)
 	}

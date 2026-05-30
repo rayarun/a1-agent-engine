@@ -42,14 +42,15 @@ func main() {
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("POST /api/v1/execute", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Code string `json:"code"`
+			Code     string `json:"code"`
+			Language string `json:"language"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request", http.StatusBadRequest)
 			return
 		}
 
-		result, err := executor.ExecutePython(r.Context(), req.Code)
+		result, err := executor.Execute(r.Context(), req.Code, req.Language)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Execution failed: %v", err), http.StatusInternalServerError)
 			return
