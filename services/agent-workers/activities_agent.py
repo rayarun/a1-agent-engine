@@ -283,6 +283,7 @@ async def pydantic_ai_reasoning_step(
     """
     import time
     from models import AgentContext, MCPToolDefinition
+    from decision_postprocess import finalize_decision
     from pydantic_ai_agent import build_agent_with_tools, convert_response_to_decision
 
     import sys
@@ -420,19 +421,19 @@ async def pydantic_ai_reasoning_step(
         logging.info(f"Token usage: tokens_in={tokens_in}, tokens_out={tokens_out}")
         activity_elapsed = (time.time() - activity_start) * 1000
         logging.info(f"[TIMING] pydantic_ai_reasoning_step completed in {activity_elapsed:.0f}ms")
-        return result
+        return finalize_decision(result)
 
     except Exception as e:
         activity_elapsed = (time.time() - activity_start) * 1000
         logging.error(f"[TIMING] pydantic_ai_reasoning_step failed in {activity_elapsed:.0f}ms: {e}", exc_info=True)
         logging.error(f"Exception type: {type(e)}", exc_info=False)
-        return {
+        return finalize_decision({
             "final_answer": None,
             "tool_calls": [],
             "messages_delta": [],
             "continue_loop": False,
             "error": str(e),
-        }
+        })
 
 
 @activity.defn
@@ -452,9 +453,10 @@ async def anthropic_agents_run(agent_context, messages=None):
         AgentDecision dict with final_answer, tool_calls, messages_delta, hitl_pending, tokens, etc.
     """
     from anthropic_agent import build_anthropic_agent_and_run
+    from decision_postprocess import finalize_decision
 
     logging.info(f"Starting anthropic_agents_run for agent {agent_context.get('agent_id')}")
-    return await build_anthropic_agent_and_run(agent_context, messages)
+    return finalize_decision(await build_anthropic_agent_and_run(agent_context, messages))
 
 
 @activity.defn
