@@ -9,7 +9,6 @@ use (
 	./services/admin-api
 	./services/agent-registry
 	./services/api-gateway
-	./services/bash-executor
 	./services/kg-service
 	./services/mcp-registry
 	./services/mcp-server
