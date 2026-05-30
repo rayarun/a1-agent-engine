@@ -31,6 +31,7 @@ from typing import Callable, Optional, Protocol
 import anthropic
 
 from hitl_markers import parse_hitl_marker
+from message_normalize import merge_consecutive_tool_results
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +170,12 @@ class AnthropicAgentCore:
             logger.info(f"[LOOP] Iteration {iteration + 1}/{self.max_iterations}")
 
             try:
+                # Coalesce any split tool_result user messages so the history
+                # conforms to Anthropic's tool_use/tool_result pairing rule.
+                # Split results arise both within this loop (multi-tool turns)
+                # and across HITL resume activity boundaries.
+                messages = merge_consecutive_tool_results(messages)
+
                 # Call Anthropic API
                 response = await self.client.messages.create(
                     model=self.model,
@@ -276,21 +283,24 @@ class AnthropicAgentCore:
                         if iteration_callback:
                             await iteration_callback("tool_result", name=tool_name)
 
-                    # Add tool results to messages
+                    # Add tool results to messages. ALL results for this
+                    # assistant turn go in ONE user message — Anthropic pairs a
+                    # multi-tool_use assistant message with a single user message
+                    # carrying every matching tool_result.
                     logger.info(f"[LOOP] Adding {len(tool_results)} tool results to messages")
-                    for res in tool_results:
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "tool_result",
-                                        "tool_use_id": res.get("tool_use_id", ""),
-                                        "content": str(res.get("content", "")),
-                                    }
-                                ],
-                            }
-                        )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": res.get("tool_use_id", ""),
+                                    "content": str(res.get("content", "")),
+                                }
+                                for res in tool_results
+                            ],
+                        }
+                    )
                     logger.info(f"[LOOP] Messages now has {len(messages)} entries, continuing to next iteration")
                     # Continue to next iteration
                     continue

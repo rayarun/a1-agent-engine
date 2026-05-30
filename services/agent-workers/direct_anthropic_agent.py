@@ -88,10 +88,13 @@ class DirectAnthropicAgent:
         # Mark session as finished if any terminal status
         if result["status"] in ["error", "max_iterations"]:
             session.state["finished"] = True
+            # Propagate the error so execute_iteration surfaces it as a
+            # terminal event; without this the UI hangs on "Awaiting result...".
             return {
                 "final_answer": result.get("final_answer"),
                 "tool_calls": result.get("tool_calls", []),
                 "continue_loop": False,
+                "error": result.get("error"),
             }
 
         # Continue loop (shouldn't reach here, but handle gracefully)

@@ -166,6 +166,19 @@ class DirectAgentExecutor:
             # Call framework executor for one reasoning step
             result = await framework_executor.execute_step(session, context)
 
+            # A framework error status (e.g. the follow-up LLM call rejected by
+            # the gateway WAF) carries no final_answer. Surface it as a terminal
+            # event so the UI doesn't stream to 'finished' with nothing to show.
+            if result.get("error"):
+                session.add_event("error", message=result["error"])
+                session.state["finished"] = True
+                return {
+                    "session_id": session.id,
+                    "events": session.get_new_events(),
+                    "continue_loop": False,
+                    "error": result["error"],
+                }
+
             # Emit events from result
             if "final_answer" in result and result["final_answer"]:
                 session.add_event("final_answer", content=result["final_answer"])
