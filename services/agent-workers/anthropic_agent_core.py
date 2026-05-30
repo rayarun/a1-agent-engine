@@ -30,6 +30,8 @@ from typing import Callable, Optional, Protocol
 
 import anthropic
 
+from hitl_markers import parse_hitl_marker
+
 logger = logging.getLogger(__name__)
 
 
@@ -240,16 +242,13 @@ class AnthropicAgentCore:
                             # the pending approval so the workflow can pause and wait
                             # for a decision (otherwise the marker is fed back to the
                             # LLM as a tool result and the agent loops to max iterations).
-                            if isinstance(result_str, str) and result_str.startswith("__HITL_PENDING__::"):
-                                segments = result_str.split("::", 3)
+                            hitl = parse_hitl_marker(result_str)
+                            if hitl is not None:
                                 logger.info(f"[LOOP] HITL approval required for tool: {tool_name}")
                                 result["status"] = "hitl_pending"
-                                result["hitl_approval_id"] = segments[1] if len(segments) > 1 else ""
-                                result["hitl_tool_name"] = segments[2] if len(segments) > 2 else tool_name
-                                try:
-                                    result["hitl_tool_args"] = json.loads(segments[3]) if len(segments) > 3 and segments[3] else {}
-                                except (json.JSONDecodeError, ValueError):
-                                    result["hitl_tool_args"] = tool_input
+                                result["hitl_approval_id"] = hitl["approval_id"]
+                                result["hitl_tool_name"] = hitl["tool_name"] or tool_name
+                                result["hitl_tool_args"] = hitl["tool_args"] or tool_input
                                 # Keep the assistant tool_use message (already appended)
                                 # so the resume path can find and execute the approved tool.
                                 result["messages"] = messages

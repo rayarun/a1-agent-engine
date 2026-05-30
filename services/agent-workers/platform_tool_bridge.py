@@ -26,6 +26,8 @@ from typing import Optional
 
 import httpx
 
+from hitl_markers import build_hitl_marker
+
 logger = logging.getLogger(__name__)
 
 
@@ -191,7 +193,7 @@ class ToolExecutionClient:
                         logger.info(f"Stored HITL approval request: {approval_id} (response: {approval_data})")
 
                         # Return marker — workflow will emit approval event and wait for signal
-                        marker = f"__HITL_PENDING__::{approval_id}::{tool_name}::{json.dumps(args)}"
+                        marker = build_hitl_marker(approval_id, tool_name, args)
                         logger.info(f"Returning HITL marker: {marker[:80]}...")
                         return marker
                     except Exception as e:

@@ -31,6 +31,7 @@ import os
 from typing import Any, Callable
 
 import httpx
+from hitl_markers import build_hitl_marker, parse_hitl_marker
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelMessage
 
@@ -203,7 +204,7 @@ class AgentToolRegistry:
                         logger.info(f"Stored HITL approval request: {approval_id} (response: {approval_data})")
 
                         # Return marker instead of polling — workflow will emit approval event and wait for signal
-                        marker = f"__HITL_PENDING__::{approval_id}::{tool_name}::{json.dumps(args)}"
+                        marker = build_hitl_marker(approval_id, tool_name, args)
                         logger.info(f"Returning HITL marker: {marker[:80]}...")
                         return marker
                     except Exception as e:
@@ -569,19 +570,10 @@ async def convert_response_to_decision(response: Any, mcp_tools: list[MCPToolDef
             if part_kind == "tool-return":
                 content = getattr(part, "content", "")
                 logger.info(f"DEBUG: Tool-return content (first 200 chars): {repr(content[:200])}")
-                if isinstance(content, str) and content.startswith("__HITL_PENDING__::"):
-                    segments = content.split("::", 3)
-                    if len(segments) >= 4:
-                        try:
-                            hitl_info = {
-                                "approval_id": segments[1],
-                                "tool_name": segments[2],
-                                "tool_args": json.loads(segments[3]) if segments[3] else {},
-                            }
-                            logger.info(f"Detected HITL pending: approval_id={hitl_info['approval_id']}, tool={hitl_info['tool_name']}")
-                            break
-                        except Exception as e:
-                            logger.warning(f"Failed to parse HITL marker: {e}")
+                hitl_info = parse_hitl_marker(content)
+                if hitl_info:
+                    logger.info(f"Detected HITL pending: approval_id={hitl_info['approval_id']}, tool={hitl_info['tool_name']}")
+                    break
         if hitl_info:
             break
 
