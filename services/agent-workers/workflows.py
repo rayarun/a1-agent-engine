@@ -50,7 +50,11 @@ class AgentWorkflow:
         manifest = request.get("manifest") or {}
         workflow.logger.info(f"[WORKFLOW] manifest keys: {list(manifest.keys())}, has_model={('model' in manifest)}, model_value={manifest.get('model', 'NOT PROVIDED')}")
         system_prompt = manifest.get("system_prompt") or "You are a helpful assistant with code execution capabilities."
-        model = manifest.get("model") or request.get("model", "mock-gpt-4o")
+        # Fallback model for agents without an explicit model (e.g. the
+        # skill-dispatcher's hitl-approver, which has no manifest). Must be a
+        # model the LLM gateway actually serves — "mock-gpt-4o" was a dead
+        # placeholder that litellm rejects with 400, breaking HITL approvals.
+        model = manifest.get("model") or request.get("model") or "claude-haiku-4-5"
         workflow.logger.info(f"[WORKFLOW] resolved model={model}, system_prompt_len={len(system_prompt)}")
         max_iterations = int(manifest.get("max_iterations") or 5)
         skills = manifest.get("skills") or []
