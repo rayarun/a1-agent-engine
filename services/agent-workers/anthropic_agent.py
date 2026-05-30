@@ -33,6 +33,29 @@ from platform_tool_bridge import ToolExecutionClient
 logger = logging.getLogger(__name__)
 
 
+def tool_use_ids_with_results(messages: list) -> set:
+    """Return the set of tool_use ids that already have a tool_result in the
+    message history.
+
+    This is the persistence-safe source of truth for "which approved tools
+    have already executed": message history survives across Temporal activity
+    boundaries (via messages_delta), whereas an in-activity set does not.
+    """
+    executed = set()
+    for msg in messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_result":
+                tid = block.get("tool_use_id")
+                if tid:
+                    executed.add(tid)
+    return executed
+
+
 class AnthropicTemporalAgent:
     """Temporal-specific wrapper around AnthropicAgentCore."""
 
@@ -67,9 +90,12 @@ class AnthropicTemporalAgent:
         """
         messages = session.messages
 
-        # Check for approved tools to resume with
+        # Check for approved tools to resume with. Determine which tool_use
+        # blocks have already executed from the message history (persisted across
+        # activity boundaries), not an in-activity set (which is lost each call
+        # and caused the approved tool to re-fire until max iterations).
         approved_tools = context.get("approved_hitl_tools", {})
-        executed_tool_use_ids = context.get("_executed_tool_use_ids", set())
+        executed_tool_use_ids = tool_use_ids_with_results(messages)
 
         # If resuming with approved tool, execute it first
         if approved_tools and messages:
@@ -120,12 +146,9 @@ class AnthropicTemporalAgent:
                                     else result_str
                                 )
 
-                                # Mark as executed
-                                if "_executed_tool_use_ids" not in context:
-                                    context["_executed_tool_use_ids"] = set()
-                                context["_executed_tool_use_ids"].add(block_id)
-
-                                # Add result to messages
+                                # Add result to messages. The appended tool_result is
+                                # what marks this tool_use as executed on subsequent
+                                # iterations (see tool_use_ids_with_results).
                                 messages.append(
                                     {
                                         "role": "user",
