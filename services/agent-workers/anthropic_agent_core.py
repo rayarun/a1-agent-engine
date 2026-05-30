@@ -234,6 +234,27 @@ class AnthropicAgentCore:
                             logger.info(f"[LOOP] Invoking tool_executor.invoke({tool_name}, ...)")
                             result_str = await self.tool_executor.invoke(tool_name, tool_input)
                             logger.info(f"[LOOP] Tool result received, length={len(result_str) if result_str else 0}")
+
+                            # HITL gate: the tool bridge returns this marker when a
+                            # tool requires human approval. Stop the loop and surface
+                            # the pending approval so the workflow can pause and wait
+                            # for a decision (otherwise the marker is fed back to the
+                            # LLM as a tool result and the agent loops to max iterations).
+                            if isinstance(result_str, str) and result_str.startswith("__HITL_PENDING__::"):
+                                segments = result_str.split("::", 3)
+                                logger.info(f"[LOOP] HITL approval required for tool: {tool_name}")
+                                result["status"] = "hitl_pending"
+                                result["hitl_approval_id"] = segments[1] if len(segments) > 1 else ""
+                                result["hitl_tool_name"] = segments[2] if len(segments) > 2 else tool_name
+                                try:
+                                    result["hitl_tool_args"] = json.loads(segments[3]) if len(segments) > 3 and segments[3] else {}
+                                except (json.JSONDecodeError, ValueError):
+                                    result["hitl_tool_args"] = tool_input
+                                # Keep the assistant tool_use message (already appended)
+                                # so the resume path can find and execute the approved tool.
+                                result["messages"] = messages
+                                return result
+
                             result_obj = (
                                 json.loads(result_str)
                                 if result_str.startswith("{")

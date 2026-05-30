@@ -164,6 +164,22 @@ class AnthropicTemporalAgent:
                 "tokens_out": result["tokens_out"],
             }
 
+        if result["status"] == "hitl_pending":
+            # A tool requires human approval. Surface it so the workflow pauses,
+            # emits an approval event, and waits for the operator's decision.
+            return {
+                "final_answer": None,
+                "tool_calls": [],
+                "messages_delta": result["messages"],
+                "continue_loop": False,
+                "hitl_pending": True,
+                "hitl_approval_id": result.get("hitl_approval_id", ""),
+                "hitl_tool_name": result.get("hitl_tool_name", ""),
+                "hitl_tool_args": result.get("hitl_tool_args", {}),
+                "tokens_in": result["tokens_in"],
+                "tokens_out": result["tokens_out"],
+            }
+
         if result["status"] == "max_iterations":
             return {
                 "final_answer": result["final_answer"],
