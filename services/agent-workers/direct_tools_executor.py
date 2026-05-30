@@ -26,6 +26,60 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 
+def parse_ddg_payload(data: dict) -> list:
+    """Extract usable results from a DuckDuckGo Instant Answer payload.
+
+    DDG's IA API is not a general web search: for most queries the `Results`
+    array is empty and the useful content lives in Abstract/Answer/Definition/
+    RelatedTopics instead. Pull from all of them. Returns a list of
+    {title, url, snippet} dicts (possibly empty).
+    """
+    results = []
+
+    abstract = (data.get("AbstractText") or "").strip()
+    if abstract:
+        results.append({
+            "title": data.get("Heading", ""),
+            "url": data.get("AbstractURL", ""),
+            "snippet": abstract,
+        })
+
+    answer = (data.get("Answer") or "").strip()
+    if answer:
+        results.append({"title": data.get("AnswerType", "Answer"), "url": "", "snippet": answer})
+
+    definition = (data.get("Definition") or "").strip()
+    if definition:
+        results.append({
+            "title": "Definition",
+            "url": data.get("DefinitionURL", ""),
+            "snippet": definition,
+        })
+
+    def _add_topic(topic):
+        text = (topic.get("Text") or "").strip()
+        if text:
+            results.append({"title": "", "url": topic.get("FirstURL", ""), "snippet": text})
+
+    for item in data.get("RelatedTopics", []):
+        if isinstance(item, dict) and item.get("Topics"):  # nested group
+            for sub in item["Topics"]:
+                _add_topic(sub)
+        elif isinstance(item, dict):
+            _add_topic(item)
+
+    for item in data.get("Results", []):
+        text = (item.get("Text") or "").strip()
+        if text or item.get("Title"):
+            results.append({
+                "title": item.get("Title", ""),
+                "url": item.get("FirstURL", ""),
+                "snippet": text,
+            })
+
+    return results
+
+
 class DirectToolsExecutor:
     """Execute tools directly without routing through Skill Dispatcher."""
 
@@ -89,48 +143,47 @@ class DirectToolsExecutor:
 
         try:
             async with aiohttp.ClientSession() as session:
-                # Use DuckDuckGo JSON endpoint (no API key required)
-                url = "https://duckduckgo.com/"
-                params = {"q": query, "format": "json"}
-                headers = {"User-Agent": "Mozilla/5.0 (compatible; bot/1.0)"}
+                # DuckDuckGo Instant Answer API (no API key required). It always
+                # responds with content-type application/x-javascript, so we read
+                # the body as text and json.loads it rather than relying on
+                # resp.json() (which would raise on the non-JSON content-type).
+                url = "https://api.duckduckgo.com/"
+                params = {"q": query, "format": "json", "no_html": "1", "no_redirect": "1"}
+                headers = {"User-Agent": "Mozilla/5.0 (compatible; a1-agent/1.0)"}
 
                 logger.info(f"[WEB_SEARCH] Calling DuckDuckGo: {url}?q={query}")
                 async with session.get(
                     url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
                 ) as resp:
                     logger.info(f"[WEB_SEARCH] Got response: status={resp.status}, content-type={resp.content_type}")
-                    if resp.status == 200:
-                        try:
-                            # Try JSON parsing first; DuckDuckGo sometimes returns application/x-javascript
-                            data = await resp.json()
-                            logger.info(f"[WEB_SEARCH] Successfully parsed JSON response")
-                        except (json.JSONDecodeError, ValueError) as e:
-                            # Fall back to text parsing if JSON fails
-                            logger.warning(f"[WEB_SEARCH] JSON parsing failed: {e}, trying text fallback")
-                            text = await resp.text()
-                            logger.info(f"[WEB_SEARCH] Response text length: {len(text)}")
-                            try:
-                                data = json.loads(text)
-                                logger.info(f"[WEB_SEARCH] Text fallback JSON parsing succeeded")
-                            except json.JSONDecodeError as e:
-                                logger.error(f"[WEB_SEARCH] Failed to parse DuckDuckGo response: {e}")
-                                return json.dumps({"error": "Invalid search response format"})
+                    text = await resp.text()
 
-                        # Extract results from DuckDuckGo response
-                        results = []
-                        for item in data.get("Results", [])[:5]:
-                            results.append(
-                                {
-                                    "title": item.get("Title", ""),
-                                    "url": item.get("FirstURL", ""),
-                                    "snippet": item.get("Text", ""),
-                                }
-                            )
-                        logger.info(f"[WEB_SEARCH] Success: query='{query}', found {len(results)} results")
-                        return json.dumps({"results": results, "query": query})
-                    else:
+                # 202 = DDG rate-limiting/soft response; not a hard failure. Only a
+                # 4xx/5xx with no parseable body is a genuine error.
+                try:
+                    data = json.loads(text)
+                except (json.JSONDecodeError, ValueError):
+                    if resp.status >= 400:
                         logger.error(f"[WEB_SEARCH] HTTP error: {resp.status}")
                         return json.dumps({"error": f"HTTP {resp.status}"})
+                    logger.warning("[WEB_SEARCH] Unparseable response body")
+                    return json.dumps({
+                        "results": [],
+                        "query": query,
+                        "message": "No web results found for this query. Answer from your own knowledge instead.",
+                    })
+
+                results = parse_ddg_payload(data)[:5]
+                logger.info(f"[WEB_SEARCH] query='{query}', found {len(results)} results")
+                if not results:
+                    # Terminal, non-error signal so the agent concludes instead of
+                    # retrying the search until it exhausts its iteration budget.
+                    return json.dumps({
+                        "results": [],
+                        "query": query,
+                        "message": "No web results found for this query. Answer from your own knowledge instead.",
+                    })
+                return json.dumps({"results": results, "query": query})
         except asyncio.TimeoutError:
             logger.error("[WEB_SEARCH] Search timed out")
             return json.dumps({"error": "Search timed out"})
